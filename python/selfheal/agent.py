@@ -29,7 +29,9 @@ class SelfHealAgent:
         if not targets or len({target.name for target in targets}) != len(targets):
             raise ValueError("Register targets with unique names")
         for target in targets:
-            runtime.language.source_file(target.module_name).relative_to(runtime.project_root)
+            source = runtime.language.source_file(target.module_name)
+            source.relative_to(runtime.project_root)
+            runtime.language.prepare(target.module_name, source.read_text(encoding="utf-8"), target.editable_symbols)
         self.runtime = runtime
         if self.runtime.event_sink is None:
             self.runtime.event_sink = TerminalReporter()

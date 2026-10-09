@@ -1,4 +1,5 @@
 use crate::error::{CoreError, CoreResult};
+use crate::patch::replace_text;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -69,7 +70,8 @@ impl SnapshotManager {
             fs::create_dir_all(parent)?;
         }
 
-        fs::copy(canonical_snapshot, target)?;
+        let original = fs::read_to_string(canonical_snapshot)?;
+        replace_text(target, &original)?;
         Ok(())
     }
 }

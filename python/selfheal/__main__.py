@@ -30,13 +30,14 @@ def _session(path: Path):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("check-config", help="Validate your local API configuration without making a network request")
     for name in ("status", "heal", "improve"):
         command = commands.add_parser(name)
         command.add_argument("--session", type=Path, default=Path(".selfheal/live.json"))
         command.add_argument("--timeout", type=float, default=300,
                              help="Maximum seconds without stream output; not a server cancellation")
         if name != "status":
-            command.add_argument("--target", default="calculator")
+            command.add_argument("--target", required=True)
             command.add_argument("--preview", action="store_true", help="Show a verified candidate without applying")
             command.add_argument("instructions", nargs="?", default="")
     agent = commands.add_parser("agent", help="Control the app's background caretaker")
@@ -45,6 +46,17 @@ def main(argv=None) -> int:
     agent.add_argument("--session", type=Path, default=Path(".selfheal/live.json"))
     agent.add_argument("--timeout", type=float, default=30)
     args = parser.parse_args(argv)
+    if args.command == "check-config":
+        from .errors import ConfigurationError
+        from .providers import provider_from_env
+        try:
+            provider = provider_from_env()
+        except (ConfigurationError, OSError) as exc:
+            print(f"Configuration error: {exc}")
+            return 2
+        print(f"Configuration loaded: {type(provider).__name__}. Your key and model are configured.")
+        print("No API request made. Account access and model availability are checked on the first request.")
+        return 0
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be a positive finite number")
     if args.command == "improve" and not args.instructions.strip():

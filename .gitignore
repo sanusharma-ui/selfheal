@@ -15,4 +15,3 @@ build/
 target/
 *.egg-info/
 .selfheal/
-Cargo.lock

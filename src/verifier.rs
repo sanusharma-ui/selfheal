@@ -2,8 +2,11 @@ use crate::error::{CoreError, CoreResult};
 use crate::policy::PolicyEngine;
 use crate::patch::replace_text;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -50,18 +53,9 @@ impl Verifier {
 
         replace_text(&candidate, replacement_source)?;
 
-        let syntax_output = Command::new(&self.config.python_executable)
-            .arg("-m")
-            .arg("py_compile")
-            .arg(&candidate)
-            .current_dir(&workspace)
-            .output()
-            .map_err(|err| {
-                CoreError::Process(format!(
-                    "Could not start Python syntax check using '{}': {err}",
-                    self.config.python_executable
-                ))
-            })?;
+        let mut syntax_command = Command::new(&self.config.python_executable);
+        syntax_command.arg("-m").arg("py_compile").arg(&candidate);
+        let syntax_output = run_check(syntax_command, &workspace, "Python syntax check", Duration::from_secs(120))?;
 
         let syntax_ok = syntax_output.status.success();
 
@@ -84,18 +78,9 @@ impl Verifier {
             });
         }
 
-        let test_output = Command::new(&self.config.python_executable)
-            .arg("-m")
-            .arg("pytest")
-            .arg("-q")
-            .current_dir(&workspace)
-            .output()
-            .map_err(|err| {
-                CoreError::Process(format!(
-                    "Could not start pytest using '{}': {err}",
-                    self.config.python_executable
-                ))
-            })?;
+        let mut test_command = Command::new(&self.config.python_executable);
+        test_command.arg("-m").arg("pytest").arg("-q");
+        let test_output = run_check(test_command, &workspace, "pytest", Duration::from_secs(120))?;
 
         let tests_ok = test_output.status.success();
 
@@ -106,6 +91,51 @@ impl Verifier {
             details: output_details("pytest", &test_output),
         })
     }
+}
+
+// Redirect to files so full pipes cannot deadlock the polling loop. Captured
+// diagnostics are bounded; execution uses host permissions, not a sandbox.
+fn run_check(mut command: Command, workspace: &Path, label: &str, deadline: Duration) -> CoreResult<Output> {
+    let mut stdout = tempfile::tempfile()?;
+    let mut stderr = tempfile::tempfile()?;
+    let import_paths = std::env::join_paths([
+        workspace.to_path_buf(), workspace.join("src"), workspace.join("python"),
+    ]).map_err(|err| CoreError::Process(err.to_string()))?;
+    command.current_dir(workspace)
+        .env("PYTHONPATH", import_paths)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout.try_clone()?))
+        .stderr(Stdio::from(stderr.try_clone()?));
+    let mut child = command.spawn().map_err(|err| {
+        CoreError::Process(format!("Could not start {label}: {err}"))
+    })?;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {},
+            Err(err) => {
+                if child.kill().is_ok() {
+                    let _ = child.wait();
+                }
+                return Err(CoreError::Process(format!("Could not wait for {label}: {err}")));
+            }
+        }
+        if started.elapsed() >= deadline {
+            child.kill().map_err(|err| CoreError::Process(format!("Could not stop timed-out {label}: {err}")))?;
+            let _ = child.wait();
+            return Err(CoreError::Process(format!("{label} exceeded the verification deadline; candidate rejected")));
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    stdout.seek(SeekFrom::Start(0))?;
+    stderr.seek(SeekFrom::Start(0))?;
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    stdout.take(64_000).read_to_end(&mut out)?;
+    stderr.take(64_000).read_to_end(&mut err)?;
+    Ok(Output { status, stdout: out, stderr: err })
 }
 
 fn output_details(label: &str, output: &Output) -> String {
@@ -144,7 +174,7 @@ fn copy_project(source: &Path, destination: &Path) -> CoreResult<()> {
         }
 
         let name = entry.file_name().to_string_lossy();
-        !ignored_component(&name)
+        !ignored_component(&name) && name != ".env" && !name.starts_with(".env.")
     }) {
         let entry = entry.map_err(|err| {
             CoreError::Io(std::io::Error::new(
@@ -184,5 +214,28 @@ mod tests {
         assert!(ignored_component(".git"));
         assert!(ignored_component(".selfheal"));
         assert!(!ignored_component("src"));
+    }
+
+    #[test]
+    fn verification_child_is_stopped_at_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let python = std::env::var("PYO3_PYTHON").unwrap_or_else(|_| "python".into());
+        let mut command = Command::new(python);
+        command.arg("-c").arg("import time; time.sleep(5)");
+        let result = run_check(command, dir.path(), "deadline test", Duration::from_millis(100));
+        assert!(matches!(result, Err(CoreError::Process(message)) if message.contains("verification deadline")));
+    }
+
+    #[test]
+    fn verification_prefers_copied_project_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/copied_app.py"), "VALUE = 'copied candidate'\n").unwrap();
+        let python = std::env::var("PYO3_PYTHON").unwrap_or_else(|_| "python".into());
+        let mut command = Command::new(python);
+        command.arg("-c").arg("from copied_app import VALUE; print(VALUE)");
+        let output = run_check(command, dir.path(), "import test", Duration::from_secs(10)).unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("copied candidate"));
     }
 }

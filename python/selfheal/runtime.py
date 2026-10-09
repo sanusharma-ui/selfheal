@@ -22,7 +22,8 @@ try:
     from ._core import CoreEngine
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "SelfHeal Rust extension is not available. Install with 'pip install -e .'."
+        "SelfHeal native extension is unavailable. Install a wheel for your Python/OS with "
+        "'python -m pip install selfheal-runtime', or build this checkout using the release guide."
     ) from exc
 
 
@@ -74,9 +75,9 @@ class SelfHealRuntime:
                     # A disconnected terminal must not interrupt recovery.
                     pass
 
-    def _health(self, module_name, check) -> HealthReport:
+    def _health(self, module_name, check, *, module=None) -> HealthReport:
         try:
-            report = check(importlib.import_module(module_name))
+            report = check(module if module is not None else importlib.import_module(module_name))
             if not isinstance(report, HealthReport) or any(
                 not isinstance(item, HealthCheckResult) for item in report.checks
             ):
@@ -101,7 +102,7 @@ class SelfHealRuntime:
         """Inspect running code on command, including silent logic bugs.
 
         apply=True is explicit command authorization. Health checks are trusted,
-        developer-owned, side-effect-free code, retained across reload. Normal
+        developer-owned, side-effect-free code, retained across activation. Normal
         invoke/call traffic can continue during provider generation and first
         verification; activation, final verification and checks are serialized.
         """
@@ -121,6 +122,7 @@ class SelfHealRuntime:
             type(name) is not str or not name.isidentifier() for name in editable_symbols
         ) or len(set(editable_symbols)) != len(editable_symbols):
             raise ValueError("editable_symbols must contain unique function names")
+        editable_symbols = editable_symbols or (symbol_name,)
         with self._lock:
             if self._disabled or self._healing:
                 return RepairResult(False, message="Healing disabled or another repair is active.", status="busy")
@@ -136,9 +138,12 @@ class SelfHealRuntime:
                 original = target.read_bytes()
                 if len(original) > self.config.max_replacement_bytes:
                     raise ValueError("Source exceeds the configured repair size limit")
+                self.language.prepare(module_name, original.decode("utf-8"), editable_symbols)
                 self._emit("inspection_started", f"Inspecting {module_name}.{symbol_name} ({operation})", on_event=on_event)
                 baseline = self._health(module_name, health_check)
                 self._emit("baseline_health", baseline.describe(), on_event=on_event)
+                if not baseline.checks:
+                    raise ValueError("Register at least one developer health check before requesting a patch")
                 failure = FailureContext(
                     ("ObservedFailure" if observed_failure else "LiveInspection") if baseline.ok else "HealthCheckFailure",
                     observed_failure or ("Developer requested live inspection" if baseline.ok else baseline.describe()),
@@ -160,7 +165,8 @@ class SelfHealRuntime:
                 return None
 
             result = self._repair(request, original, confirm=confirm, retry_safe=retry_safe,
-                                  auto_apply=apply, preview=not apply, on_event=on_event)
+                                  auto_apply=apply, preview=not apply, on_event=on_event,
+                                  health_check=health_check)
         except Exception as exc:
             result = RepairResult(False, message=redact(
                 f"Live inspection stopped ({type(exc).__name__}). Source activation was not completed."
@@ -218,13 +224,15 @@ class SelfHealRuntime:
         if len(original) > self.config.max_replacement_bytes:
             return RepairResult(False, message="Source exceeds the configured repair size limit.")
         source = original.decode("utf-8")
+        self.language.prepare(module_name, source, (symbol_name,))
         self._emit("failure_detected", f"{module_name}.{symbol_name}: {failure.exception_type}")
-        return self._repair(RepairRequest(failure, source, self.project_root), original,
+        return self._repair(RepairRequest(failure, source, self.project_root,
+                                         editable_symbols=(symbol_name,)), original,
                             confirm=lambda: self.handle(module_name, symbol_name)(*args, **kwargs),
                             retry_safe=retry_safe, auto_apply=self.config.auto_apply)
 
     def _repair(self, request, original, *, confirm, retry_safe,
-                auto_apply, preview=False, on_event=None) -> RepairResult:
+                auto_apply, preview=False, on_event=None, health_check=None) -> RepairResult:
         target = request.failure.target_file
         source = request.source_code
         module_name = request.failure.module_name
@@ -252,6 +260,7 @@ class SelfHealRuntime:
         self._emit("candidate", str(proposal.explanation), proposal_id=proposal_id, diff=diff, on_event=on_event)
         try:
             validate_edit_scope(source, replacement, request.editable_symbols)
+            updates = self.language.prepare(module_name, replacement, request.editable_symbols)
         except (ValueError, SyntaxError) as exc:
             self._emit("scope_rejected", str(exc), proposal_id=proposal_id, on_event=on_event)
             return RepairResult(False, proposal_id, "Candidate violated the editable function policy.", status="failed")
@@ -291,14 +300,43 @@ class SelfHealRuntime:
         with self._lock:
             if target.read_bytes() != original:
                 return stopped("Source changed after review; candidate discarded.")
+            updates = self.language.prepare(module_name, replacement, request.editable_symbols)
+            module = importlib.import_module(module_name)
+            original_bindings = {name: getattr(module, name) for name in request.editable_symbols}
+            if health_check is not None:
+                candidate = self.language.candidate_module(module_name, updates)
+                candidate_health = self._health(module_name, health_check, module=candidate)
+                self._emit("candidate_health", candidate_health.describe(), proposal_id=proposal_id, on_event=on_event)
+                if not candidate_health.ok:
+                    return stopped("Candidate failed developer health checks; live source and functions unchanged.")
+                if target.read_bytes() != original:
+                    return stopped("Source changed during candidate health checks; candidate discarded.")
+            original_codes = [(function, function.__code__) for function, _ in updates]
             self._emit("activation_started", "Final verification, snapshot and source replacement.",
                        proposal_id=proposal_id, on_event=on_event)
-            receipt = self.core.verify_and_apply(str(target), replacement, proposal_id, source)
             try:
-                self.language.activate(module_name)
-                self._emit("patch_applied", f"Reloaded {module_name}; snapshot: {receipt.snapshot_file}",
+                receipt = self.core.verify_and_apply(str(target), replacement, proposal_id, source)
+            except BaseException as native_exc:
+                try:
+                    source_intact = target.read_bytes() == original
+                except OSError:
+                    source_intact = False
+                if not source_intact:
+                    self._disabled = True
+                if not isinstance(native_exc, Exception):
+                    raise
+                return stopped(
+                    "Native verification/application failed; original source confirmed unchanged." if source_intact else
+                    "Native application failed and original source could not be confirmed; healing disabled. Restart the application.",
+                    "failed" if source_intact else "disabled",
+                )
+            try:
+                self.language.activate(module_name, request.editable_symbols)
+                self._emit("patch_applied", f"Updated {module_name} functions; snapshot: {receipt.snapshot_file}",
                            proposal_id=proposal_id, on_event=on_event)
                 value = confirm()
+                if any(getattr(module, name, None) is not function for name, function in original_bindings.items()):
+                    raise RuntimeError("An editable function was rebound during activation checks")
                 if target.read_bytes() != replacement.encode("utf-8"):
                     raise RuntimeError("Source changed during activation or health checks")
                 self.core.commit(receipt.target_file, receipt.proposal_id)
@@ -307,10 +345,13 @@ class SelfHealRuntime:
                 self._emit("rollback_started", reason, proposal_id=proposal_id, on_event=on_event)
                 try:
                     self.core.rollback(receipt.target_file, receipt.snapshot_file, receipt.proposal_id, reason)
-                    self.language.activate(module_name)
+                    for function, code in original_codes:
+                        function.__code__ = code
+                    for name, function in original_bindings.items():
+                        setattr(module, name, function)
                 except BaseException:
                     self._disabled = True
-                    reason += " Rollback or restored-module reload failed; healing disabled. Restart the application."
+                    reason += " Source or function-code restoration failed; healing disabled. Restart the application."
                 else:
                     reason += " Original source restored. External side effects are not undone."
                 self._emit("rollback_finished", reason, proposal_id=proposal_id, on_event=on_event)

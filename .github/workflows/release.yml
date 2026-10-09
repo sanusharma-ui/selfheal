@@ -1,0 +1,82 @@
+name: Build release artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64
+            artifact: linux-x64
+          - os: windows-latest
+            target: x86_64
+            artifact: windows-x64
+          - os: macos-15-intel
+            target: x86_64
+            artifact: macos-intel
+          - os: macos-14
+            target: aarch64
+            artifact: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch locked notice sources
+        run: cargo fetch --locked
+      - name: Verify dependency notices
+        run: python scripts/generate_notices.py --check
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --locked
+          manylinux: auto
+      - name: Check archive contents
+        run: python scripts/check_dist.py
+      - name: Install the built wheel with verification dependencies
+        run: python -c "import pathlib, subprocess, sys; wheel = next(pathlib.Path('dist').glob('*.whl')); subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(wheel) + '[verification]'])"
+      - name: Verify installed SDK origin and command entry point
+        run: |
+          python -c "import pathlib, selfheal, selfheal._core; root = pathlib.Path(selfheal.__file__).resolve(); assert 'site-packages' in root.parts, root; print(root)"
+          selfheal --help
+      - name: Run regressions against the installed wheel
+        run: python -m pytest tests -o pythonpath= --import-mode=importlib
+      - name: Check package metadata
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  source:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fetch --locked
+      - run: python scripts/generate_notices.py --check
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - run: python scripts/check_dist.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: dist/*.tar.gz
+          if-no-files-found: error

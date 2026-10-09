@@ -8,11 +8,22 @@ version = "0.3.0"
 description = "Embeddable AI healing agent and Rust-backed live repair runtime for Python"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT AND Apache-2.0 WITH LLVM-exception AND Unicode-3.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+keywords = ["self-healing", "live-patching", "python-sdk", "ai", "health-checks"]
 authors = [
     { name = "SelfHeal Runtime Contributors" }
 ]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
@@ -22,6 +33,7 @@ dependencies = ["python-dotenv>=1,<2"]
 selfheal = "selfheal.__main__:main"
 
 [project.optional-dependencies]
+verification = ["pytest>=8"]
 dev = [
     "pytest>=8",
 ]
@@ -30,6 +42,23 @@ dev = [
 python-source = "python"
 module-name = "selfheal._core"
 features = ["pyo3/extension-module"]
+bindings = "pyo3"
+strip = true
+locked = true
+include = [
+    { path = ".env.example", format = "sdist" },
+    { path = "selfheal.example.toml", format = "sdist" },
+    { path = "docs/**", format = "sdist" },
+    { path = "tests/**", format = "sdist" },
+    { path = "examples/**/*.py", format = "sdist" },
+    { path = "scripts/*.py", format = "sdist" },
+    { path = "MANUAL_TESTING.md", format = "sdist" },
+]
+exclude = [
+    ".env", ".env.local", ".env.production", ".env.development", ".env.test",
+    ".venv/**", ".selfheal/**", "**/.selfheal/**", ".git/**",
+    "**/__pycache__/**", "**/*.pyc", "**/.pytest_cache/**",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

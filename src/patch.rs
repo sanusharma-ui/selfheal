@@ -30,8 +30,7 @@ fn sibling_temp_path(target: &Path) -> CoreResult<PathBuf> {
 
 pub fn replace_text(target: &Path, replacement: &str) -> CoreResult<()> {
     let temp_path = sibling_temp_path(target)?;
-
-    {
+    let result = (|| -> CoreResult<()> {
         let mut handle = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -40,19 +39,16 @@ pub fn replace_text(target: &Path, replacement: &str) -> CoreResult<()> {
         handle.write_all(replacement.as_bytes())?;
         handle.flush()?;
         handle.sync_all()?;
-    }
-
-    #[cfg(windows)]
-    {
-        // Rust uses MoveFileExW with replacement on Windows; do not remove
-        // the original first (a failed rename must leave it available).
+        if let Ok(metadata) = fs::metadata(target) {
+            fs::set_permissions(&temp_path, metadata.permissions())?;
+        }
+        drop(handle);
+        // Rename with replacement; never remove the original first.
         fs::rename(&temp_path, target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
     }
-
-    #[cfg(not(windows))]
-    {
-        fs::rename(&temp_path, target)?;
-    }
-
-    Ok(())
+    result
 }

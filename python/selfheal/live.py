@@ -39,6 +39,8 @@ class LiveTarget:
             type(name) is not str or not name.isidentifier() for name in self.editable_symbols
         ):
             raise ValueError("editable_symbols must contain unique function names")
+        if self.symbol_name not in self.editable_symbols:
+            raise ValueError("editable_symbols must include the registered symbol_name")
 
 
 class LiveControlServer:

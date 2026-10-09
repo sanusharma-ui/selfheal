@@ -10,6 +10,9 @@ The Python distribution is `selfheal-runtime`; imports use `selfheal`. From this
 checkout, a developer can install it with `python -m pip install -e .` or build a
 wheel with `maturin build --release` and install that wheel in another app.
 The wheel contains the Rust extension, Python SDK, agent and `selfheal` command.
+After publication, install `selfheal-runtime[verification]` for project pytest
+checks. The developer must configure their own API key/model; use
+`python -m selfheal check-config` for offline configuration validation.
 Publishing to PyPI is a separate release step; this change does not publish it.
 Windows source builds need the C++/Rust toolchain described in `MANUAL_TESTING.md`.
 
@@ -154,29 +157,35 @@ periodic health check / observed exception / explicit command
     -> AI inspects registered module + bounded health context
     -> complete candidate diff in terminal
     -> editable-function policy + Rust verification in copied workspace
-    -> pause routed calls; recheck original source; final Rust verification
-    -> snapshot; write source; reload module in the same PID
+    -> pause routed calls; recheck source; pure checks against candidate functions
+    -> final Rust verification; snapshot; write source; replace selected function code
     -> run retained developer checks
-    -> commit, or restore source + reload on failure
+    -> commit, or restore source + retained original function code on failure
 ```
 
 Normal routed calls continue during AI generation and initial verification.
 They wait during final verification, activation and health checks. This is a
 single-process development runtime, not zero-downtime multi-worker deployment.
 Verification compiles syntax and optionally runs the project's existing pytest
-suite. It does not generate trusted tests from the model. Function policies
+suite, with a 120 second deadline per subprocess and bounded diagnostics.
+Candidate health checks use a separate module/function view sharing app objects;
+they run only after activation authorization and must be pure. Module initialization
+does not re-run: globals, function identity, defaults and unmodified decorators
+remain intact. It does not generate trusted tests from the model. Function policies
 freeze signatures, decorators and other module definitions; editable functions
 remain privileged code and may still have side effects.
 
 The agent updates one registered Python module per transaction. It does not
-attach to arbitrary unintegrated processes, repair native/async functions,
-replace existing class instances or change dependencies. Calls must go through
+attach to arbitrary unintegrated processes, repair native/async/generator functions,
+repair wrapper closures or class methods, replace existing class instances or
+change dependencies. Calls must go through
 `agent.bind()`, `agent.call()`, `runtime.invoke()` or `runtime.call()` for dispatch
 and activation coordination. Multiple processes/other runtimes are unsupported.
 
 Rollback restores source, not external writes or arbitrary in-memory state.
 Checks and activated functions run with app permissions and currently have no
-in-process execution deadline. Native pytest verification also has no deadline.
+in-process execution deadline. Native verification kills its direct child on
+timeout; arbitrary child process trees are not contained by an OS sandbox.
 Graceful shutdown waits for accepted transactions; a forced process kill does
 not provide automatic crash recovery. If restoration fails, healing is disabled
 and the app must restart. Use complete health contracts and trusted development

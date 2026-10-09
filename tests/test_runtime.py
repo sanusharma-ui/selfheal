@@ -101,7 +101,7 @@ def test_disabled_retry_does_not_claim_success(app):
     assert not rt.last_result.healed
 
 
-@pytest.mark.parametrize("source", ["def run(:\n", "def run():\n    raise RuntimeError('retry failed')\n", "raise RuntimeError('reload failed')\n"])
+@pytest.mark.parametrize("source", ["def run(:\n", "def run():\n    raise RuntimeError('retry failed')\n"])
 def test_invalid_or_unsuccessful_repair_restores_source(app, source):
     rt = runtime(app, provider=FixedProvider(source), config={"auto_apply": True})
     with pytest.raises(ZeroDivisionError):
@@ -170,3 +170,24 @@ def test_commit_failure_rolls_back(app, monkeypatch):
         call(rt, app, retry_safe=True)
     assert app[1].read_text() == BROKEN
     assert "repair_rolled_back" in events(app)
+
+
+def test_synchronous_repair_cannot_replace_unrelated_module_code(app):
+    rt = runtime(app, provider=FixedProvider("raise RuntimeError('module takeover')\n"), config={"auto_apply": True})
+    with pytest.raises(ZeroDivisionError):
+        call(rt, app, retry_safe=True)
+    assert app[1].read_text() == BROKEN
+    assert "patch_applied" not in events(app)
+
+
+def test_live_repair_preserves_module_state_and_existing_function_reference(app):
+    stateful = "INITIALIZED = object()\nCACHE = {}\ndef run():\n    return 1 / 0\n"
+    app[1].write_text(stateful)
+    module = importlib.import_module(app[0])
+    initialized, cache, saved_function = module.INITIALIZED, module.CACHE, module.run
+    cache["keep"] = 7
+    rt = runtime(app, provider=FixedProvider(stateful.replace("1 / 0", "6 * 7")), config={"auto_apply": True})
+    assert call(rt, app, retry_safe=True) == 42
+    assert module.INITIALIZED is initialized and module.CACHE is cache
+    assert module.CACHE == {"keep": 7}
+    assert module.run is saved_function and saved_function() == 42

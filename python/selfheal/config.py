@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 import tomllib
 
+from .errors import ConfigurationError
+
 
 @dataclass(slots=True)
 class SelfHealConfig:
@@ -18,8 +20,27 @@ class SelfHealConfig:
     max_replacement_bytes: int = 128_000
 
     def __post_init__(self) -> None:
+        self.project_root = Path(self.project_root).resolve()
+        if not self.project_root.is_dir():
+            raise ConfigurationError("project_root must be an existing application directory")
+        for name in ("run_tests", "auto_apply", "retry_after_repair"):
+            if type(getattr(self, name)) is not bool:
+                raise ConfigurationError(f"{name} must be a boolean")
+        if type(self.python_executable) is not str or not self.python_executable.strip():
+            raise ConfigurationError("python_executable must identify the application's Python interpreter")
+        for name in ("snapshot_dir", "audit_file"):
+            value = getattr(self, name)
+            if type(value) is not str or not value.strip():
+                raise ConfigurationError(f"{name} must be a nonempty relative path inside project_root")
+            path = Path(value)
+            if path.is_absolute() or path.drive or ".." in path.parts:
+                raise ConfigurationError(f"{name} must be a relative path inside project_root")
+            try:
+                (self.project_root / path).resolve().relative_to(self.project_root)
+            except ValueError:
+                raise ConfigurationError(f"{name} must stay inside project_root") from None
         if type(self.max_replacement_bytes) is not int or self.max_replacement_bytes <= 0:
-            raise ValueError("max_replacement_bytes must be a positive integer")
+            raise ConfigurationError("max_replacement_bytes must be a positive integer")
 
     def normalized_root(self) -> Path:
         return self.project_root.resolve()

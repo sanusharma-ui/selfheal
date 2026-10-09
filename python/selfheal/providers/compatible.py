@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from selfheal.models import RepairProposal, RepairRequest
+from selfheal.errors import ConfigurationError
 from selfheal.privacy import redact
 from .base import AIProvider
 from .errors import ContextRejected, InvalidProposal, ProviderUnavailable
@@ -59,17 +60,23 @@ class OpenAICompatibleProvider(AIProvider):
         if (url.scheme != "https" or not url.hostname or url.username
                 or url.password or url.query or url.fragment):
             raise ValueError("base_url must be an HTTPS URL without credentials, query or fragment")
-        if not api_key.strip() or not model.strip():
-            raise ValueError("api_key and model are required")
-        if not math.isfinite(timeout) or not 0 < timeout <= 300:
+        if type(api_key) is not str or type(model) is not str or not api_key.strip() or not model.strip():
+            raise ConfigurationError("Your own api_key and model are required")
+        placeholders = {"...", "changeme", "change-me", "your-api-key", "your-groq-key", "your-openai-key",
+                        "your-model", "your-enabled-json-capable-model"}
+        if api_key.strip().lower() in placeholders or model.strip().lower() in placeholders:
+            raise ConfigurationError("Replace placeholder API credentials and model names with your own configuration")
+        if "\r" in api_key or "\n" in api_key:
+            raise ConfigurationError("api_key must not contain line breaks")
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300:
             raise ValueError("timeout must be between 0 and 300 seconds")
         if type(max_retries) is not int or not 0 <= max_retries <= 2:
             raise ValueError("max_retries must be 0, 1 or 2")
         for value in (max_context_bytes, max_output_tokens, max_replacement_bytes):
             if type(value) is not int or value <= 0:
                 raise ValueError("Provider limits must be positive integers")
-        self._api_key = api_key
-        self.model = model
+        self._api_key = api_key.strip()
+        self.model = model.strip()
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries

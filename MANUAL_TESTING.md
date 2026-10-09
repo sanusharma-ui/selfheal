@@ -4,31 +4,32 @@ Run all commands from `D:\Projects\selfheal`.
 
 ## V0.3 live calculator and background heal bot
 
-These are commands for **you to run**. The changes were not executed, built,
-tested in a browser, or sent to an AI provider by the coding agent.
+These are commands for **you to run**. Release builds, installed-wheel validation,
+browser testing and live-provider requests remain maintainer validation steps.
 
-If your editable installation already imports `selfheal._core`, the Python
-changes are available without a native API rebuild. Reinstall the editable
-package to refresh version metadata and the new `selfheal` console command:
+Rebuild the editable package to include native verification, stable-ABI packaging
+and the current Python SDK. Run this build yourself:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
 `python -m selfheal` is available through the existing editable installation.
-The Rust behavior/API did not change; only its package version was updated.
+The Rust verification implementation and wheel ABI changed for this release;
+an older extension does not validate the updated native behavior.
 
 For manual command-based testing, start this in Terminal 1:
 
 ```powershell
-$env:GROQ_API_KEY = "your-groq-key"
-$env:GROQ_MODEL = "your-enabled-json-capable-model"
+# Configure your own key/model in .env; SELFHEAL_USE_GROQ=true selects Groq.
+.\.venv\Scripts\python.exe -m selfheal check-config
 .\.venv\Scripts\python.exe examples/live_calculator.py
 ```
 
 Use a JSON-output-capable Groq model available to your account, or set
 `OPENAI_API_KEY` + `OPENAI_MODEL`. The key must be in Terminal 1's process, not
-just the command client's terminal. No credential is embedded in the calculator.
+just the command client's terminal. The app also loads its working directory's
+`.env`; process variables take precedence. No credential is embedded in the calculator.
 
 Open `http://127.0.0.1:8765` yourself. This single-file app deliberately begins
 with three bugs: `8 - 3` returns `11`, `10 % 3` returns `3`, and `10 / 0` raises.
@@ -47,8 +48,9 @@ Run in Terminal 2, also from the project directory:
 ```
 
 Expect full unified diffs and staged verification/activation output in both
-terminals. A preview never changes live source. A live candidate commits only
-if all retained calculator checks pass; otherwise the old source is restored.
+terminals. A preview never changes live source. A candidate must pass checks in
+a separate function view before activation. Running checks must also pass after
+activation, or the old source and function code are restored.
 AI-generated candidates are not guaranteed to pass. Repeat the arithmetic after
 an `applied` result: expected results are `5`, `1`, and safe zero division (`None`).
 The page and terminal should show the same PID before/after. No server restart

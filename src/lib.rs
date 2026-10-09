@@ -95,18 +95,18 @@ impl CoreEngine {
     #[pyo3(signature = (target_file, replacement_source, proposal_id=None))]
     fn verify(
         &self,
+        py: Python<'_>,
         target_file: String,
         replacement_source: String,
         proposal_id: Option<String>,
     ) -> PyResult<VerificationReport> {
-        let (id, report) = self
-            .inner
-            .verify(
+        let (id, report) = py.detach(|| {
+            self.inner.verify(
                 &PathBuf::from(target_file),
                 &replacement_source,
                 proposal_id.as_deref(),
             )
-            .map_err(py_err)?;
+        }).map_err(py_err)?;
 
         Ok(VerificationReport {
             ok: report.ok,
@@ -120,20 +120,20 @@ impl CoreEngine {
     #[pyo3(signature = (target_file, replacement_source, proposal_id=None, expected_source=None))]
     fn verify_and_apply(
         &self,
+        py: Python<'_>,
         target_file: String,
         replacement_source: String,
         proposal_id: Option<String>,
         expected_source: Option<String>,
     ) -> PyResult<RepairReceipt> {
-        let receipt = self
-            .inner
-            .verify_and_apply(
+        let receipt = py.detach(|| {
+            self.inner.verify_and_apply(
                 &PathBuf::from(target_file),
                 &replacement_source,
                 proposal_id.as_deref(),
                 expected_source.as_deref(),
             )
-            .map_err(py_err)?;
+        }).map_err(py_err)?;
 
         Ok(RepairReceipt {
             proposal_id: receipt.proposal_id,

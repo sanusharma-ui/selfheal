@@ -20,18 +20,25 @@ SelfHeal Runtime performs source-code verification and controlled source replace
   review what source and exception context your application may transmit.
 - Review mode verifies code before presenting approval. Verification tests execute
   in a copied workspace with host permissions, not an OS sandbox. They can access
-  the network, environment and host files and currently have no execution deadline.
+  the network, environment and host files. Native verification has a 120 second
+  deadline per subprocess; it kills the direct child, not an arbitrary process tree.
 - Only safe-to-repeat calls should use `retry_safe=True`. Rollback restores source,
   not external side effects, stale references, class instances or arbitrary memory.
 - Single-runtime serialization is not process/worker coordination. Concurrent source
   writers and hostile filesystem changes are outside this development threat model.
-- If rollback or restored-module reload fails, restart the application; healing is
+- If source or function-code restoration fails, restart the application; healing is
   disabled for the affected runtime instance and reported through `last_result`.
 
 ## Background agent and local control
 
 - Register only developer-owned code and pure, bounded health checks. Keep checks
   outside editable function bodies. Target allowlists are not execution sandboxes.
+- Candidate checks run after authorization in a separate module/function view
+  that shares app objects; purity is a developer obligation. In-process health
+  checks and patched functions have no execution deadline.
+- Scoped activation preserves module state by updating function code rather than
+  re-running initialization. Synchronous module-level functions are supported;
+  wrapper closures, async/generator functions and native callables are rejected.
 - Scheduled activation requires `AgentConfig(auto_apply=True)` and safe-to-repeat
   targets. Explicit `heal`/`improve` commands separately authorize activation.
 - Use AI transaction budgets, failure backoff, and target suspension. Pausing the
@@ -47,3 +54,12 @@ SelfHeal Runtime performs source-code verification and controlled source replace
 ## Reporting issues
 
 For now, report security issues privately to the project maintainer rather than publishing sensitive exploitation details in a public issue.
+
+## Licensing and data responsibilities
+
+Original source is MIT licensed; bundled dependency notices are retained in
+`THIRD_PARTY_NOTICES.md`. Use only source and systems you own or are authorized
+to modify. The developer supplies their own API account and chooses the vendor;
+review that vendor's terms and obtain permission to transmit the application's
+source and diagnostic data. No SDK license guarantees AI output ownership,
+regulatory compliance or permission to modify third-party software.

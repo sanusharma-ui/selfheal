@@ -88,7 +88,7 @@ impl CoreEngine {
                 "ok": report.ok,
                 "syntax_ok": report.syntax_ok,
                 "tests_ok": report.tests_ok,
-                "details": report.details,
+                // Persist outcomes only: test diagnostics may contain secrets.
             }),
         )?;
 

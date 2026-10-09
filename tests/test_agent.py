@@ -75,11 +75,11 @@ def test_preview_does_not_mutate_live_module(sample):
 
 
 def test_empty_health_report_cannot_authorize_a_patch(sample):
-    runtime, target, path, _, _ = sample
+    runtime, target, path, provider, _ = sample
     result = runtime.inspect(module_name=target.module_name, symbol_name="run",
                              health_check=lambda module: HealthReport(()), retry_safe=True,
                              editable_symbols=("run",), apply=True)
-    assert result.status == "rolled_back"
+    assert result.status == "failed" and not provider.requests
     assert path.read_text() == BROKEN
 
 
@@ -98,14 +98,41 @@ def test_stale_provider_result_preserves_a_developer_edit(sample):
     assert path.read_text() == manual
 
 
-def test_health_failure_rolls_back_a_syntactically_valid_patch(sample):
+def test_candidate_health_failure_never_changes_running_source(sample):
     runtime, target, path, provider, events = sample
     provider.source = BROKEN.replace("return 1", "return 3")
     result = inspect(sample, apply=True)
-    assert result.status == "rolled_back" and not result.healed
+    assert result.status == "failed" and not result.healed
     assert path.read_bytes() == BROKEN.encode()
     assert importlib.import_module(target.module_name).run() == 1
+    assert any(event.phase == "candidate_health" for event in events)
+    assert not any(event.phase == "patch_applied" for event in events)
+
+
+def test_running_health_failure_restores_original_function_code_and_source(sample):
+    runtime, target, path, _, events = sample
+    module = importlib.import_module(target.module_name)
+    saved_function, saved_code = module.run, module.run.__code__
+
+    def candidate_only_health(candidate):
+        return HealthReport((HealthCheckResult("live activation gate", candidate is not module and candidate.run() == 2),))
+
+    result = runtime.inspect(module_name=target.module_name, symbol_name="run",
+                             health_check=candidate_only_health, retry_safe=True, apply=True)
+    assert result.status == "rolled_back"
+    assert path.read_text() == BROKEN and saved_function() == 1
+    assert module.run is saved_function and module.run.__code__ is saved_code
     assert any(event.phase == "rollback_finished" for event in events)
+
+
+def test_function_rebinding_during_activation_is_rejected_and_restored(sample):
+    runtime, target, path, provider, _ = sample
+    module = importlib.import_module(target.module_name)
+    saved = module.run
+    provider.source = "KEEP = 'unchanged'\ndef run():\n    globals()['run'] = lambda: 999\n    return 2\n"
+    result = inspect(sample, apply=True)
+    assert result.status == "rolled_back" and path.read_text() == BROKEN
+    assert module.run is saved and saved() == 1
 
 
 @pytest.mark.parametrize("source", [FIXED.replace("unchanged", "tampered"),

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from selfheal.errors import ConfigurationError
+
 from .base import AIProvider
 from .compatible import OpenAICompatibleProvider
 from .errors import ProviderUnavailable
@@ -57,29 +59,29 @@ def provider_from_env(
         if "SELFHEAL_USE_GROQ" in env:
             use_groq = env["SELFHEAL_USE_GROQ"].strip().lower()
             if use_groq not in ("true", "false"):
-                raise ValueError("SELFHEAL_USE_GROQ must be true (Groq) or false (OpenAI)")
+                raise ConfigurationError("SELFHEAL_USE_GROQ must be true (Groq) or false (OpenAI)")
             selected = "groq" if use_groq == "true" else "openai"
             priority = (selected,)
         else:
             priority = tuple(env.get("SELFHEAL_PROVIDER_PRIORITY", "groq,openai").split(","))
     names = tuple(name.strip().lower() for name in priority)
     if not names or len(set(names)) != len(names) or any(n not in ("groq", "openai") for n in names):
-        raise ValueError("priority must contain unique provider names: groq, openai")
+        raise ConfigurationError("priority must contain unique provider names: groq, openai")
     providers = []
     for name in names:
         prefix = name.upper()
         key = env.get(prefix + "_API_KEY", "").strip()
         if not key:
             if selected:
-                raise ValueError(f"Set {prefix}_API_KEY and {prefix}_MODEL for the selected {name} provider")
+                raise ConfigurationError(f"Set {prefix}_API_KEY and {prefix}_MODEL in your .env or process environment for the selected {name} provider")
             continue
         model = env.get(prefix + "_MODEL", "").strip()
         if not model:
-            raise ValueError(f"Set {prefix}_MODEL for the configured {name} provider")
+            raise ConfigurationError(f"Set {prefix}_MODEL for the configured {name} provider")
         cls = GroqProvider if name == "groq" else OpenAIProvider
         providers.append(cls(api_key=key, model=model, **options))
         if not fallback:
             return providers[0]
     if not providers:
-        raise ValueError("Set GROQ_API_KEY and GROQ_MODEL, or OPENAI_API_KEY and OPENAI_MODEL")
+        raise ConfigurationError("Set GROQ_API_KEY and GROQ_MODEL, or OPENAI_API_KEY and OPENAI_MODEL in your .env or process environment. SelfHeal does not supply API credentials.")
     return FallbackProvider(providers)
