@@ -2632,7 +2632,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## js-sys 0.3.105
+## js-sys 0.3.106
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -2872,7 +2872,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## libc 0.2.189
+## libc 0.2.190
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -4497,7 +4497,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## pyo3 0.29.2
+## pyo3 0.29.3
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -4714,7 +4714,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## pyo3-build-config 0.29.2
+## pyo3-build-config 0.29.3
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -4931,7 +4931,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## pyo3-ffi 0.29.2
+## pyo3-ffi 0.29.3
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -5148,7 +5148,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## pyo3-macros 0.29.2
+## pyo3-macros 0.29.3
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -5365,7 +5365,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## pyo3-macros-backend 0.29.2
+## pyo3-macros-backend 0.29.3
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -8661,7 +8661,7 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 ````
 
-## uuid 1.26.1
+## uuid 1.27.0
 
 Declared license: `Apache-2.0 OR MIT`.
 
@@ -8940,7 +8940,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ````
 
-## wasm-bindgen 0.2.128
+## wasm-bindgen 0.2.129
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -9180,7 +9180,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## wasm-bindgen-macro 0.2.128
+## wasm-bindgen-macro 0.2.129
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -9420,7 +9420,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## wasm-bindgen-macro-support 0.2.128
+## wasm-bindgen-macro-support 0.2.129
 
 Declared license: `MIT OR Apache-2.0`.
 
@@ -9660,7 +9660,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-## wasm-bindgen-shared 0.2.128
+## wasm-bindgen-shared 0.2.129
 
 Declared license: `MIT OR Apache-2.0`.
 
