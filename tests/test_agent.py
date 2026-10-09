@@ -30,7 +30,7 @@ class CandidateProvider(AIProvider):
 def sample(tmp_path, monkeypatch):
     name = "heal_app_" + uuid.uuid4().hex
     path = tmp_path / (name + ".py")
-    path.write_text(BROKEN, encoding="utf-8")
+    path.write_bytes(BROKEN.encode("utf-8"))
     monkeypatch.syspath_prepend(str(tmp_path))
     provider = CandidateProvider()
     events = []
@@ -89,7 +89,7 @@ def test_stale_provider_result_preserves_a_developer_edit(sample):
     manual = BROKEN.replace("return 1", "return 7")
 
     def edit_while_generating(request):
-        path.write_text(manual)
+        path.write_bytes(manual.encode("utf-8"))
         return propose(request)
 
     provider.propose_repair = edit_while_generating

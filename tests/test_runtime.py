@@ -28,7 +28,7 @@ class FixedProvider(AIProvider):
 def app(tmp_path, monkeypatch):
     name = "app_" + uuid.uuid4().hex
     target = tmp_path / (name + ".py")
-    target.write_text(BROKEN, encoding="utf-8")
+    target.write_bytes(BROKEN.encode("utf-8"))
     monkeypatch.syspath_prepend(str(tmp_path))
     yield name, target
     sys.modules.pop(name, None)
@@ -130,7 +130,7 @@ def test_provider_error_preserves_original(app, monkeypatch):
 def test_stale_approval_does_not_overwrite_edit(app):
     manual = "def run():\n    return 7\n"
     def approve(_):
-        app[1].write_text(manual)
+        app[1].write_bytes(manual.encode("utf-8"))
         return True
     rt = runtime(app, reviewer=approve)
     with pytest.raises(ZeroDivisionError):
