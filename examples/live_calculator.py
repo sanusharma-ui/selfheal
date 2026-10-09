@@ -26,25 +26,45 @@ def calculate(expression: str) -> float | int | None:
         raise ValueError("Invalid arithmetic expression") from exc
     if sum(1 for _ in ast.walk(tree)) > 80:
         raise ValueError("Expression is too complex")
-    binary = {ast.Add: operator.add, ast.Sub: operator.add, ast.Mult: operator.mul,
-              ast.Div: operator.truediv, ast.Mod: operator.floordiv, ast.Pow: operator.pow}
+    # Fixed operator mappings: subtraction and remainder were incorrect.
+    binary = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.Mod: operator.mod,
+        ast.Pow: operator.pow,
+    }
 
     def evaluate(node):
+        # Evaluate constants.
         if isinstance(node, ast.Constant) and type(node.value) in (int, float):
-            value = node.value
-        elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            return node.value
+        # Evaluate unary + and -.
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
             number = evaluate(node.operand)
-            value = number if isinstance(node.op, ast.UAdd) else -number
-        elif isinstance(node, ast.BinOp) and type(node.op) in binary:
-            left, right = evaluate(node.left), evaluate(node.right)
+            if number is None:
+                return None
+            return number if isinstance(node.op, ast.UAdd) else -number
+        # Evaluate binary operations.
+        if isinstance(node, ast.BinOp) and type(node.op) in binary:
+            left = evaluate(node.left)
+            right = evaluate(node.right)
+            # Propagate None from sub‑expressions (e.g., division by zero).
+            if left is None or right is None:
+                return None
+            # Guard against division or modulo by zero.
+            if isinstance(node.op, (ast.Div, ast.Mod)) and right == 0:
+                return None
+            # Exponent limits.
             if isinstance(node.op, ast.Pow) and abs(right) > 12:
                 raise ValueError("Exponent must be between -12 and 12")
             value = binary[type(node.op)](left, right)
-        else:
-            raise ValueError("Only numbers, parentheses and + - * / % ** are allowed")
-        if isinstance(value, complex) or not math.isfinite(value) or abs(value) > 1e12:
-            raise ValueError("Result is outside the supported numeric range")
-        return value
+            # After computing, ensure the result is a supported numeric value.
+            if isinstance(value, complex) or not math.isfinite(value) or abs(value) > 1e12:
+                raise ValueError("Result is outside the supported numeric range")
+            return value
+        raise ValueError("Only numbers, parentheses and + - * / % ** are allowed")
 
     return evaluate(tree.body)
 
@@ -82,8 +102,8 @@ def calculator_health(module):
     return HealthReport(tuple(checks))
 
 
-PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Live calculator</title>
+PAGE = """<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Live calculator</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#111827;color:#e5e7eb;font:16px system-ui;display:grid;min-height:100dvh;place-items:center;padding:24px}
 main{width:min(100%,520px);background:#1f2937;padding:30px;border-radius:18px}h1{font-size:28px;margin:12px 0}p{color:#b8c2d1;line-height:1.6}
@@ -91,12 +111,12 @@ form{display:flex;gap:10px}input{min-width:0;width:100%;padding:14px;border:1px 
 button{padding:12px 16px;border:0;border-radius:8px;background:#a7f3d0;color:#064e3b;font-weight:700;cursor:pointer}output{display:block;overflow-wrap:anywhere;font-size:28px;min-height:60px;padding:20px 0}
 small{color:#a7f3d0}code{color:#d1fae5}.examples{display:flex;flex-wrap:wrap;gap:8px}.examples button{background:#374151;color:#e5e7eb;font-weight:400}
 @media(max-width:380px){main{padding:20px}form{flex-direction:column}}
-</style><main><small id="state">Connecting...</small><h1>Live calculator</h1>
+</style><main><small id=\"state\">Connecting...</small><h1>Live calculator</h1>
 <p>Keep this page open while SelfHeal repairs the running app.</p>
-<form id="form"><input id="expression" aria-label="Arithmetic expression" value="8 - 3" autocomplete="off"><button>Calculate</button></form>
-<output id="result" aria-live="polite">Ready</output><div class="examples">
-<button type="button" data-expression="8 - 3">8 - 3</button><button type="button" data-expression="10 % 3">10 % 3</button>
-<button type="button" data-expression="10 / 0">10 / 0</button><button type="button" data-expression="6 * 7">6 * 7</button></div>
+<form id=\"form\"><input id=\"expression\" aria-label=\"Arithmetic expression\" value=\"8 - 3\" autocomplete=\"off\"><button>Calculate</button></form>
+<output id=\"result\" aria-live=\"polite\">Ready</output><div class=\"examples\">
+<button type=\"button\" data-expression=\"8 - 3\">8 - 3</button><button type=\"button\" data-expression=\"10 % 3\">10 % 3</button>
+<button type=\"button\" data-expression=\"10 / 0\">10 / 0</button><button type=\"button\" data-expression=\"6 * 7\">6 * 7</button></div>
 <p>This sample starts with deliberate bugs. Use the terminal heal command, then calculate again.</p></main>
 <script>
 const expression=document.getElementById('expression'), result=document.getElementById('result');

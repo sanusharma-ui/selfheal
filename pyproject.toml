@@ -16,7 +16,7 @@ classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
-dependencies = []
+dependencies = ["python-dotenv>=1,<2"]
 
 [project.scripts]
 selfheal = "selfheal.__main__:main"

@@ -17,9 +17,7 @@ scheduled mutation is opt-in. An explicit terminal `heal` command authorizes a
 verified live patch.
 
 ```powershell
-# Terminal 1: credentials must be configured in this app process.
-$env:GROQ_API_KEY = "your-groq-key"
-$env:GROQ_MODEL = "your-enabled-json-capable-model"
+# Terminal 1: configure .env in the current working directory (see below).
 .\.venv\Scripts\python.exe examples/live_calculator.py
 
 # Terminal 2, same working directory: inspect and patch the running app.
@@ -69,7 +67,22 @@ setup commands and expected results.
 
 Install the project using the development instructions below. Windows requires
 the Rust MSVC toolchain and Visual Studio C++ Build Tools with a Windows SDK.
-Set process environment variables (the package does not automatically load `.env`):
+Copy `.env.example` to `.env` in the directory where you run the app and edit it:
+
+```dotenv
+SELFHEAL_USE_GROQ=true
+GROQ_API_KEY=your-groq-key
+GROQ_MODEL=your-enabled-json-capable-model
+OPENAI_API_KEY=
+OPENAI_MODEL=
+```
+
+Set `SELFHEAL_USE_GROQ=false` to use `OPENAI_API_KEY` and `OPENAI_MODEL`.
+Only the selected provider's credentials are required. `provider_from_env()`
+loads the current working directory's `.env`; existing process variables take
+precedence. Restart the app after changing the selection or credentials.
+
+Start the demo, or supply process environment variables instead:
 
 ```powershell
 $env:GROQ_API_KEY = "your-groq-key"
@@ -97,13 +110,17 @@ Offline demonstration (no API key or network needed):
 ```python
 from selfheal.providers import provider_from_env, GroqProvider, OpenAIProvider
 
-provider = provider_from_env()  # default priority: groq,openai; skips absent keys
+provider = provider_from_env()  # .env boolean selects Groq or OpenAI
 provider = provider_from_env(priority=("openai", "groq"), fallback=True)
 # Or explicitly select one provider:
 provider = GroqProvider(api_key="...", model="your-model", timeout=30, max_retries=1)
 ```
 
-`SELFHEAL_PROVIDER_PRIORITY` overrides the default order. A present key requires
+An explicit `priority` argument overrides `SELFHEAL_USE_GROQ`. Without that
+argument, `SELFHEAL_USE_GROQ=true/false` pins the selected provider even when
+`fallback=True`; missing credentials cause an error without switching vendors.
+If the boolean is absent, `SELFHEAL_PROVIDER_PRIORITY` overrides the default
+`groq,openai` order and providers without keys are skipped. A present key requires
 its matching model variable. Without credentials initialization fails clearly.
 Fallback is **off by default**; enabling it allows the context to be sent to the
 next configured provider on authentication, connection, quota or service failures.

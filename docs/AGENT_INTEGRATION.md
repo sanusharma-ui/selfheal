@@ -92,7 +92,10 @@ with agent, LiveControlServer(
 importable by your app. Config files and callback imports are trusted developer
 code, not an untrusted user input interface. Credentials are read from process
 environment: `GROQ_API_KEY` + `GROQ_MODEL`, or `OPENAI_API_KEY` + `OPENAI_MODEL`.
-The package does not automatically load `.env`.
+`provider_from_env()` loads `.env` from the current working directory, preserving
+existing process environment variables. Set `SELFHEAL_USE_GROQ=true` for Groq or
+`false` for OpenAI; only the selected provider's credentials are required.
+Without this boolean, the existing provider priority behavior applies.
 
 ## Periodic behavior and improvements
 

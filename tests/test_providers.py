@@ -1,4 +1,5 @@
 import json
+import os
 from io import BytesIO
 from urllib.error import HTTPError, URLError
 
@@ -53,6 +54,68 @@ def test_priority_and_explicit_fallback():
 def test_bad_configuration_fails_early(env):
     with pytest.raises(ValueError):
         provider_from_env(environ=env)
+
+
+@pytest.mark.parametrize("switch,kind,model", [
+    ("true", GroqProvider, "gm"), ("false", OpenAIProvider, "om"),
+    (" TRUE ", GroqProvider, "gm"), (" False ", OpenAIProvider, "om"),
+])
+def test_boolean_selects_only_requested_provider(switch, kind, model):
+    env = {"SELFHEAL_USE_GROQ": switch, "SELFHEAL_PROVIDER_PRIORITY": "openai,groq",
+           "GROQ_API_KEY": "g", "GROQ_MODEL": "gm", "OPENAI_API_KEY": "o", "OPENAI_MODEL": "om"}
+    selected = provider_from_env(environ=env)
+    assert isinstance(selected, kind)
+    assert selected.model == model
+    chain = provider_from_env(environ=env, fallback=True)
+    assert len(chain.providers) == 1
+    assert isinstance(chain.providers[0], kind)
+
+
+@pytest.mark.parametrize("switch,prefix,other", [
+    ("true", "GROQ", "OPENAI"), ("false", "OPENAI", "GROQ"),
+])
+@pytest.mark.parametrize("missing", ["API_KEY", "MODEL"])
+def test_selected_provider_requires_own_credentials(switch, prefix, other, missing):
+    env = {"SELFHEAL_USE_GROQ": switch, other + "_API_KEY": "other-key", other + "_MODEL": "other-model",
+           prefix + "_API_KEY": "selected-key", prefix + "_MODEL": "selected-model"}
+    env.pop(prefix + "_" + missing)
+    with pytest.raises(ValueError, match=prefix + "_" + missing):
+        provider_from_env(environ=env, fallback=True)
+
+
+@pytest.mark.parametrize("switch", ["", "yes", "0", "invalid-secret-value"])
+def test_invalid_boolean_fails_without_exposing_value(switch):
+    with pytest.raises(ValueError, match="SELFHEAL_USE_GROQ must be true") as exc:
+        provider_from_env(environ={"SELFHEAL_USE_GROQ": switch})
+    assert "invalid-secret-value" not in str(exc.value)
+
+
+def test_explicit_priority_overrides_boolean():
+    env = {"SELFHEAL_USE_GROQ": "true", "OPENAI_API_KEY": "o", "OPENAI_MODEL": "om"}
+    assert isinstance(provider_from_env(environ=env, priority=("openai",)), OpenAIProvider)
+
+
+def test_dotenv_loading_and_process_precedence(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    for name in ("SELFHEAL_USE_GROQ", "SELFHEAL_PROVIDER_PRIORITY", "GROQ_API_KEY", "GROQ_MODEL",
+                 "OPENAI_API_KEY", "OPENAI_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / ".env").write_text(
+        '\ufeff# Select from a local file\nexport SELFHEAL_USE_GROQ="false"\n'
+        'OPENAI_API_KEY="local-${LITERAL}-key" # keep literal\nOPENAI_MODEL="local-model"\n'
+        'GROQ_API_KEY=groq-key\nGROQ_MODEL=groq-model\n', encoding="utf-8",
+    )
+    # Isolated mappings must neither read .env nor alter the process environment.
+    with pytest.raises(ValueError, match="Set GROQ_API_KEY"):
+        provider_from_env(environ={})
+    monkeypatch.setenv("OPENAI_MODEL", "process-model")
+    selected = provider_from_env()
+    assert isinstance(selected, OpenAIProvider)
+    assert selected.model == "process-model"
+    assert selected._api_key == "local-${LITERAL}-key"
+    monkeypatch.setenv("SELFHEAL_USE_GROQ", "true")
+    assert isinstance(provider_from_env(), GroqProvider)
 
 
 def test_wire_request_and_valid_proposal(monkeypatch, request_data):
