@@ -1,6 +1,6 @@
 [package]
 name = "selfheal-runtime"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Rust core for a provider-independent self-healing Python application runtime"
 publish = false

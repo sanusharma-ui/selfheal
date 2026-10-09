@@ -4,8 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "selfheal-runtime"
-version = "0.2.0"
-description = "Rust-first self-healing runtime with Python application support"
+version = "0.3.0"
+description = "Embeddable AI healing agent and Rust-backed live repair runtime for Python"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -17,6 +17,9 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 dependencies = []
+
+[project.scripts]
+selfheal = "selfheal.__main__:main"
 
 [project.optional-dependencies]
 dev = [

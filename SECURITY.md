@@ -28,6 +28,22 @@ SelfHeal Runtime performs source-code verification and controlled source replace
 - If rollback or restored-module reload fails, restart the application; healing is
   disabled for the affected runtime instance and reported through `last_result`.
 
+## Background agent and local control
+
+- Register only developer-owned code and pure, bounded health checks. Keep checks
+  outside editable function bodies. Target allowlists are not execution sandboxes.
+- Scheduled activation requires `AgentConfig(auto_apply=True)` and safe-to-repeat
+  targets. Explicit `heal`/`improve` commands separately authorize activation.
+- Use AI transaction budgets, failure backoff, and target suspension. Pausing the
+  agent prevents future background scans; an accepted transaction may finish.
+- Local control is loopback-only with a random credential in `.selfheal/live.json`.
+  Keep that file private. Windows file mode flags do not provide a custom ACL.
+- One app process must own the agent. All participating calls must use its dynamic
+  dispatch/activation lock. Multi-worker patching and forced-kill crash recovery
+  are not implemented. Graceful shutdown waits for accepted repairs.
+- An AI patch can pass known checks while still containing bugs. Improvements need
+  developer-defined contracts; rollback does not undo side effects or memory changes.
+
 ## Reporting issues
 
 For now, report security issues privately to the project maintainer rather than publishing sensitive exploitation details in a public issue.

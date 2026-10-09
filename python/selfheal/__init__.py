@@ -1,6 +1,11 @@
-from .config import SelfHealConfig
+from .config import AgentConfig, SelfHealConfig
 from .runtime import SelfHealRuntime
-from .models import RepairReview, RepairResult
+from .models import HealthCheckResult, HealthReport, RepairEvent, RepairReview, RepairResult
+from .live import LiveControlServer, LiveTarget
+from .terminal import TerminalReporter
+from .agent import SelfHealAgent
 
-__all__ = ["SelfHealConfig", "SelfHealRuntime", "RepairReview", "RepairResult"]
-__version__ = "0.2.0"
+__all__ = ["SelfHealConfig", "SelfHealRuntime", "RepairReview", "RepairResult",
+           "HealthCheckResult", "HealthReport", "RepairEvent", "LiveControlServer",
+           "LiveTarget", "TerminalReporter", "SelfHealAgent", "AgentConfig"]
+__version__ = "0.3.0"

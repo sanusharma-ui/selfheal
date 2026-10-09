@@ -2,6 +2,113 @@
 
 Run all commands from `D:\Projects\selfheal`.
 
+## V0.3 live calculator and background heal bot
+
+These are commands for **you to run**. The changes were not executed, built,
+tested in a browser, or sent to an AI provider by the coding agent.
+
+If your editable installation already imports `selfheal._core`, the Python
+changes are available without a native API rebuild. Reinstall the editable
+package to refresh version metadata and the new `selfheal` console command:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+`python -m selfheal` is available through the existing editable installation.
+The Rust behavior/API did not change; only its package version was updated.
+
+For manual command-based testing, start this in Terminal 1:
+
+```powershell
+$env:GROQ_API_KEY = "your-groq-key"
+$env:GROQ_MODEL = "your-enabled-json-capable-model"
+.\.venv\Scripts\python.exe examples/live_calculator.py
+```
+
+Use a JSON-output-capable Groq model available to your account, or set
+`OPENAI_API_KEY` + `OPENAI_MODEL`. The key must be in Terminal 1's process, not
+just the command client's terminal. No credential is embedded in the calculator.
+
+Open `http://127.0.0.1:8765` yourself. This single-file app deliberately begins
+with three bugs: `8 - 3` returns `11`, `10 % 3` returns `3`, and `10 / 0` raises.
+`6 * 7` is a healthy comparison. The agent waits 300 seconds for its first
+scheduled check and defaults to preview mode; pause it during a controlled
+manual walkthrough if desired.
+
+Run in Terminal 2, also from the project directory:
+
+```powershell
+.\.venv\Scripts\python.exe -m selfheal agent pause
+.\.venv\Scripts\python.exe -m selfheal status
+.\.venv\Scripts\python.exe -m selfheal heal --target calculator --preview
+.\.venv\Scripts\python.exe -m selfheal heal --target calculator
+.\.venv\Scripts\python.exe -m selfheal status
+```
+
+Expect full unified diffs and staged verification/activation output in both
+terminals. A preview never changes live source. A live candidate commits only
+if all retained calculator checks pass; otherwise the old source is restored.
+AI-generated candidates are not guaranteed to pass. Repeat the arithmetic after
+an `applied` result: expected results are `5`, `1`, and safe zero division (`None`).
+The page and terminal should show the same PID before/after. No server restart
+is requested by the repair. Source changes and snapshots persist on disk.
+
+Try an improvement while keeping the browser open:
+
+```powershell
+.\.venv\Scripts\python.exe -m selfheal improve "Make invalid-expression messages clearer while preserving all arithmetic contracts" --target calculator
+```
+
+Only `calculate`'s body can change; the server, HTML, checks and integration
+remain protected by the function policy. The existing checks cover arithmetic
+regressions; assess any new UX behavior yourself.
+
+For automatic periodic repair, stop the app with Ctrl+C, restore a broken
+calculator fixture if you already healed it, then start:
+
+```powershell
+.\.venv\Scripts\python.exe examples/live_calculator.py --interval 60 --auto-apply
+```
+
+The first local health check runs after 60 seconds. Failing checks trigger an AI
+request and verified activation automatically. Healthy checks skip AI by default;
+add `--scan-healthy` to opt into periodic source inspection even when checks pass.
+
+```powershell
+.\.venv\Scripts\python.exe -m selfheal agent status
+.\.venv\Scripts\python.exe -m selfheal agent scan --target calculator
+.\.venv\Scripts\python.exe -m selfheal agent pause
+.\.venv\Scripts\python.exe -m selfheal agent resume
+.\.venv\Scripts\python.exe -m selfheal agent reset --target calculator
+```
+
+Periodic diffs print in the app terminal. `agent scan` queues work governed by
+the agent's current activation policy and budget; `heal` performs a direct live
+transaction. Backoff defaults to 60 seconds, AI budget to six transactions/hour,
+and target suspension to three consecutive failures. Reset clears suspension
+without resetting the AI budget. A disconnected client does not cancel an
+accepted repair; inspect status before issuing another.
+
+Snapshots and Rust audit events are under `examples/.selfheal/`. The authenticated
+session file is `.selfheal/live.json` in the working directory. Do not share its
+credential. If the app crashed, confirm its process exited before removing a
+stale session file. Use `--session` for another location. Ports can be configured
+with `--port` and `--control-port`.
+
+To repeat the exact broken fixture, make a backup **before** your first repair:
+
+```powershell
+New-Item -ItemType Directory -Force examples/.selfheal
+Copy-Item -LiteralPath examples/live_calculator.py -Destination examples/.selfheal/calculator-original.py
+# After stopping the app, restore that fixture:
+Copy-Item -LiteralPath examples/.selfheal/calculator-original.py -Destination examples/live_calculator.py
+```
+
+The original V0.2 offline/rollback scenarios below remain available. The added
+agent/live regression files can be run with the existing pytest commands; they
+were supplied but not run by the coding agent.
+
 ## One-time setup
 
 Install Visual Studio 2022 Build Tools with **Desktop development with C++**,

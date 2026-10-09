@@ -1,0 +1,28 @@
+# Copy to selfheal.toml in YOUR app. Credentials stay in environment variables.
+# Replace these module and callback references with your own trusted app code.
+[runtime]
+project_root = "."
+run_tests = true
+auto_apply = false
+retry_after_repair = true
+max_replacement_bytes = 128000
+
+[agent]
+interval_seconds = 300
+auto_apply = false
+scan_when_healthy = false
+run_on_start = false
+max_attempts_per_hour = 6
+failure_backoff_seconds = 60
+max_consecutive_failures = 3
+# Optional recurring improvement. Without this, the agent focuses on bugs.
+improvement_instructions = ""
+
+[[targets]]
+name = "pricing"
+module_name = "myapp.pricing"
+symbol_name = "quote"
+health_check = "myapp.health:check_pricing"
+editable_symbols = ["quote"]
+retry_safe = true
+instructions = "Preserve the quote API and the application's pricing contracts."

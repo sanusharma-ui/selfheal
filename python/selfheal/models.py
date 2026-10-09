@@ -29,6 +29,10 @@ class RepairRequest:
     failure: FailureContext
     source_code: str
     project_root: Path
+    operation: str = "repair"
+    instructions: str = ""
+    health_report: str = ""
+    editable_symbols: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -46,6 +50,40 @@ class RepairResult:
     message: str = ""
     return_value: Any = None
     review: RepairReview | None = None
+    status: str = "stopped"
+    snapshot_file: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HealthCheckResult:
+    name: str
+    ok: bool
+    details: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class HealthReport:
+    """Developer-owned checks; empty reports never authorize activation."""
+    checks: tuple[HealthCheckResult, ...]
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.checks) and all(check.ok is True for check in self.checks)
+
+    def describe(self) -> str:
+        return "\n".join(
+            f"{'PASS' if check.ok is True else 'FAIL'} {check.name}: {check.details}"
+            for check in self.checks
+        ) or "FAIL: no health checks registered"
+
+
+@dataclass(frozen=True, slots=True)
+class RepairEvent:
+    phase: str
+    message: str
+    proposal_id: str | None = None
+    diff: str = ""
+    timestamp: str = field(default_factory=utc_now_iso)
 
 
 @dataclass(frozen=True, slots=True)

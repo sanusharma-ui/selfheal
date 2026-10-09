@@ -2,6 +2,42 @@
 
 SelfHeal Runtime is a **Rust-first, Python-first-support self-healing application runtime**.
 
+## V0.3: an embeddable background heal bot
+
+Install SelfHeal in your Python app, register code and developer-owned health
+checks, and run `SelfHealAgent` alongside it. The agent performs periodic checks,
+queues inspections on application failures, and can apply verified AI patches
+without restarting the owning process. Wrong-result bugs can be detected even
+when no exception is raised. Scheduled improvements require configured instructions.
+
+Every candidate diff, verification result, snapshot, activation health report
+and rollback is visible through `TerminalReporter`. AI transactions are bounded
+by an hourly budget, failure backoff and suspension. Defaults produce previews;
+scheduled mutation is opt-in. An explicit terminal `heal` command authorizes a
+verified live patch.
+
+```powershell
+# Terminal 1: credentials must be configured in this app process.
+$env:GROQ_API_KEY = "your-groq-key"
+$env:GROQ_MODEL = "your-enabled-json-capable-model"
+.\.venv\Scripts\python.exe examples/live_calculator.py
+
+# Terminal 2, same working directory: inspect and patch the running app.
+.\.venv\Scripts\python.exe -m selfheal heal --target calculator
+.\.venv\Scripts\python.exe -m selfheal status
+.\.venv\Scripts\python.exe -m selfheal improve "Make invalid-expression errors clearer" --target calculator
+```
+
+Open `http://127.0.0.1:8765` yourself and calculate again after the repair. The
+calculator is a separate single-file manual test app, not the product. For
+scheduled automatic healing, start it with `--interval 60 --auto-apply`.
+
+See [developer integration](docs/AGENT_INTEGRATION.md),
+[reusable configuration](selfheal.example.toml), and
+[manual live testing](MANUAL_TESTING.md). The installable Python package and
+console entry point are configured; PyPI publication and the future Node/npm
+adapter are separate release work. Only integrated Python apps are supported now.
+
 ## V0.2: OpenAI, Groq and reviewed live repair
 
 The Python SDK now supports OpenAI and Groq through Chat Completions, plus
@@ -132,7 +168,8 @@ or overwrite a prior snapshot. Approval/rejection is recorded in the audit journ
 - A temporary verification workspace is **not an OS security sandbox**. Tests and
   module activation execute with the application's permissions. Use trusted,
   disposable development environments. Test subprocesses do not yet have deadlines.
-- Healing remains synchronous and limited to one Python module/file. Calls through
+- Exception repair remains synchronous and limited to one Python module/file. The
+  V0.3 agent also schedules background inspection. Calls through
   one runtime instance are serialized; direct calls, other instances and workers
   are not coordinated. Existing imported function references and class instances
   are not rewritten. Reload does not restore arbitrary module state.
@@ -811,7 +848,21 @@ For sensitive production systems, future releases should prefer process-level ca
 - [x] explicit fallback providers
 - [x] byte context budgets and completion token limits
 
-## V0.3 - Verification engine
+## V0.3 - Embeddable healing agent
+
+- [x] periodic developer-owned health checks
+- [x] wrong-result and command-triggered source inspection
+- [x] background exception notifications and dynamic app dispatch
+- [x] configured recurring improvements
+- [x] bounded AI transaction budget, backoff and target suspension
+- [x] function-body policy and retained activation health contracts
+- [x] authenticated local control and terminal patch streaming
+- [x] pip packaging, console entry point and TOML integration
+- [x] separate single-file manual live calculator
+- [ ] live verification by the developer
+- [ ] PyPI publication and Node/npm adapter
+
+## Further verification work
 
 - [ ] generated regression tests
 - [ ] Ruff integration
@@ -819,14 +870,15 @@ For sensitive production systems, future releases should prefer process-level ca
 - [ ] security scanners
 - [ ] patch-size limits
 - [ ] protected files
-- [ ] diff inspection
+- [x] terminal diff inspection
 - [ ] repair scoring
 
 ## V0.4 - Runtime healing
 
 - [ ] retry strategies
 - [ ] reconnect strategies
-- [ ] circuit breakers
+- [x] background target failure backoff and suspension
+- [ ] production service circuit breakers
 - [ ] process supervisor
 - [ ] health probes
 - [ ] controlled restart activation
