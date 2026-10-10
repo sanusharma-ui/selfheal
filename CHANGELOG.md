@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Module-level async function dispatch and safe retry on the owning asyncio loop,
+  with async health/inspection APIs and async agent bindings and lifecycle.
+- Awaited calls participate in activation coordination; pending repairs drain
+  active calls and pause new admissions before changing function code.
+- Cancellation requests abort accepted repairs at safe checkpoints and waits for
+  coroutine cleanup and rollback; failed retries cannot recursively request AI.
+- Direct automatic repairs have an hourly transaction limit and failure cooldown,
+  alongside the background agent's existing budgets, backoff and suspension.
+- Supplied offline async regression cases and an integration/cancellation guide.
+  Tests and native builds remain for maintainer execution; no passing result or
+  production-readiness claim is made for these changes.
+
 ## 0.3.0 — initial PyPI release preparation
 
 - Python SDK with registered live targets, developer health contracts, background

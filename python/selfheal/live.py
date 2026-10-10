@@ -1,7 +1,7 @@
 """Authenticated loopback control for an explicitly integrated running app."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
@@ -21,7 +21,7 @@ class LiveTarget:
     name: str
     module_name: str
     symbol_name: str
-    health_check: Callable[[ModuleType], HealthReport]
+    health_check: Callable[[ModuleType], HealthReport | Awaitable[HealthReport]]
     instructions: str = ""
     editable_symbols: tuple[str, ...] = ()
     retry_safe: bool = False

@@ -77,6 +77,27 @@ caller and queue a background scan; SelfHeal does not silently retry that
 original request. Future calls use the committed repair. `runtime.call()` retains
 the earlier synchronous exception/retry API for explicitly safe retries.
 
+## Async applications
+
+For module-level `async def` targets, `agent.bind()` returns an async callable.
+Enter `async with agent` inside the application's owning event loop, then use
+`await bound_function(...)` or `await agent.acall("target", ...)`. Exceptions
+queue the same bounded background inspection; an ordinary cancelled request
+does not request repair. The async context manager awaits shutdown so the loop
+remains available to finish accepted health checks, activation and rollback.
+
+`await runtime.acall(..., retry_safe=True)` provides an explicitly safe immediate
+retry. Use `await runtime.ainvoke(...)` for dispatch without automatic repair,
+`await runtime.acheck_health(...)` for local checks, and
+`await runtime.ainspect(...)` for manual inspection. Async health checks await
+functions on the supplied module directly. Candidate checks run in a disposable
+process; live checks and retries use the owning application loop.
+
+One runtime belongs to one event loop. The dispatcher tracks concurrent awaited
+calls, pauses new admissions and drains active calls before activation. Async
+generators remain unsupported. See the [async guide](ASYNC.md) for a complete
+integration example, cancellation semantics, limits and maintainer-run tests.
+
 ## TOML configuration
 
 Copy `selfheal.example.toml` into your application as `selfheal.toml`, replace its
@@ -178,11 +199,12 @@ freeze signatures, decorators and other module definitions; editable functions
 remain privileged code and may still have side effects.
 
 The agent updates one registered Python module per transaction. It does not
-attach to arbitrary unintegrated processes, repair native/async/generator functions,
+attach to arbitrary unintegrated processes, repair native/generator/async-generator functions,
 repair wrapper closures or class methods, replace existing class instances or
 change dependencies. Calls must go through
-`agent.bind()`, `agent.call()`, `runtime.invoke()` or `runtime.call()` for dispatch
-and activation coordination. Multiple processes/other runtimes are unsupported.
+`agent.bind()`, `agent.call()`, `runtime.invoke()` or `runtime.call()` (or their
+async counterparts) for dispatch and activation coordination. Multiple
+processes/other runtimes and multiple event loops per runtime are unsupported.
 
 Rollback restores source, not external writes or arbitrary in-memory state.
 Checks and activated functions run with app permissions. One monotonic deadline

@@ -32,10 +32,12 @@ class PythonRuntimeAdapter:
                     or function.__code__.co_name != name or function.__code__.co_freevars
                     or code is None or code.co_freevars):
                 raise ValueError("Live targets must be module-level Python functions without wrapper closures")
-            unsupported = inspect.CO_COROUTINE | inspect.CO_GENERATOR | inspect.CO_ASYNC_GENERATOR
+            unsupported = inspect.CO_GENERATOR | inspect.CO_ASYNC_GENERATOR
             if function.__code__.co_flags & unsupported or code.co_flags & unsupported:
-                raise ValueError("Async and generator functions are not supported live targets")
+                raise ValueError("Generator and async generator functions are not supported live targets")
             current = function.__code__
+            if bool(current.co_flags & inspect.CO_COROUTINE) != bool(code.co_flags & inspect.CO_COROUTINE):
+                raise ValueError("The candidate must preserve whether the running function is async")
             if (current.co_argcount, current.co_posonlyargcount, current.co_kwonlyargcount,
                     current.co_flags & (inspect.CO_VARARGS | inspect.CO_VARKEYWORDS)) != (
                     code.co_argcount, code.co_posonlyargcount, code.co_kwonlyargcount,

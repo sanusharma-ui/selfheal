@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import asdict
+import asyncio
 import importlib
+import inspect
 from pathlib import Path
 from threading import Event, RLock, Thread
 import time
@@ -79,6 +81,22 @@ class SelfHealAgent:
             pass  # Reporting cannot count one expired transaction as two failures.
 
     def start(self):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            needs_loop = any(
+                inspect.iscoroutinefunction(self.runtime.handle(target.module_name, target.symbol_name).resolve())
+                or inspect.iscoroutinefunction(target.health_check)
+                or inspect.iscoroutinefunction(getattr(target.health_check, "__call__", None))
+                for target in self.targets.values()
+            )
+            loop = self.runtime._async_loop
+            if needs_loop and (loop is None or loop.is_closed() or not loop.is_running()):
+                raise RuntimeError("Start an async agent inside its running application loop, or attach that loop first")
+        else:
+            # Register before the worker can run its first health check, even
+            # when application traffic has not used an async binding yet.
+            self.runtime.attach_async_loop()
         with self._lock:
             if self._thread is not None:
                 raise RuntimeError("Agent already started; create another agent after stopping")
@@ -89,6 +107,7 @@ class SelfHealAgent:
 
     def stop(self, timeout: float | None = None) -> bool:
         """Wait for an in-flight transaction by default; never cancel mid-activation."""
+        self.runtime._sync_entry("await agent.astop(...)")
         self._stop.set()
         self._wake.set()
         if self._thread is not None:
@@ -97,6 +116,32 @@ class SelfHealAgent:
         if stopped:
             self._emit("agent_stopped", "Background caretaker stopped.")
         return stopped
+
+    async def astop(self, timeout: float | None = None) -> bool:
+        """Keep the owning loop available until the worker finishes recovery.
+
+        A timeout may return False while a transaction is still active. Caller
+        cancellation instead waits for the worker to finish before propagating,
+        so async context exit cannot strand an activation on a stopped loop.
+        """
+        self.runtime._async_entry(repair=True)
+        self._stop.set()
+        self._wake.set()
+        loop = asyncio.get_running_loop()
+        until = None if timeout is None else loop.time() + max(0, timeout)
+        cancellation = None
+        while self._thread is not None and self._thread.is_alive():
+            if cancellation is None and until is not None and loop.time() >= until:
+                return False
+            try:
+                await asyncio.sleep(0.01)
+            except asyncio.CancelledError as exc:
+                if cancellation is None:
+                    cancellation = exc
+        self._emit("agent_stopped", "Background caretaker stopped.")
+        if cancellation is not None:
+            raise cancellation
+        return True
 
     def pause(self):
         with self._lock:
@@ -132,20 +177,47 @@ class SelfHealAgent:
 
     def call(self, target_name: str, /, *args, **kwargs):
         target = self.targets[target_name]
+        # API errors must not create AI work or failure notifications.
+        self.runtime._sync_entry("await agent.acall(...)", dispatch=True)
+        self.runtime._sync_target(target.module_name, target.symbol_name)
         try:
             return self.runtime.invoke(module_name=target.module_name, symbol_name=target.symbol_name,
                                        args=args, kwargs=kwargs)
         except Exception as exc:
-            self._emit("agent_failure", f"{target_name}: {type(exc).__name__}; queued an inspection.")
-            with self._lock:
-                text = redact(f"{type(exc).__name__}: {exc}")
-                self._notifications[target_name] = text.encode("utf-8")[:4000].decode("utf-8", errors="ignore")
-            self.request_scan(target_name)
+            self._notify_failure(target_name, exc)
             raise  # Preserve the application error; only future calls use the repair.
+
+    async def acall(self, target_name: str, /, *args, **kwargs):
+        target = self.targets[target_name]
+        self.runtime._async_entry()
+        function = self.runtime.handle(target.module_name, target.symbol_name).resolve()
+        if not inspect.iscoroutinefunction(function):
+            raise TypeError("agent.acall requires a coroutine target; use agent.call for synchronous functions")
+        try:
+            return await self.runtime.ainvoke(module_name=target.module_name, symbol_name=target.symbol_name,
+                                             args=args, kwargs=kwargs)
+        except Exception as exc:
+            # CancelledError is a BaseException and never queues a repair.
+            self._notify_failure(target_name, exc)
+            raise
+
+    def _notify_failure(self, target_name, exc):
+        self._emit("agent_failure", f"{target_name}: {type(exc).__name__}; queued an inspection.")
+        with self._lock:
+            text = redact(f"{type(exc).__name__}: {exc}")
+            self._notifications[target_name] = text.encode("utf-8")[:4000].decode("utf-8", errors="ignore")
+        self.request_scan(target_name)
 
     def bind(self, target_name: str):
         if target_name not in self.targets:
             raise ValueError("Unknown registered target")
+        target = self.targets[target_name]
+        function = self.runtime.handle(target.module_name, target.symbol_name).resolve()
+        if inspect.iscoroutinefunction(function):
+            async def async_protected(*args, **kwargs):
+                return await self.acall(target_name, *args, **kwargs)
+
+            return async_protected
 
         def protected(*args, **kwargs):
             return self.call(target_name, *args, **kwargs)
@@ -287,3 +359,9 @@ class SelfHealAgent:
 
     def __exit__(self, *args):
         self.stop()
+
+    async def __aenter__(self):
+        return self.start()
+
+    async def __aexit__(self, *args):
+        await self.astop()

@@ -25,6 +25,8 @@ class SelfHealConfig:
     repair_timeout_seconds: float | None = None
     timeout_cleanup_seconds: float | None = None
     hard_timeout: bool | None = None
+    max_auto_repairs_per_hour: int = 6
+    repair_failure_cooldown_seconds: float = 60
 
     def __post_init__(self) -> None:
         self.project_root = Path(self.project_root).resolve()
@@ -48,6 +50,12 @@ class SelfHealConfig:
                 raise ConfigurationError(f"{name} must stay inside project_root") from None
         if type(self.max_replacement_bytes) is not int or self.max_replacement_bytes <= 0:
             raise ConfigurationError("max_replacement_bytes must be a positive integer")
+        if type(self.max_auto_repairs_per_hour) is not int or self.max_auto_repairs_per_hour < 1:
+            raise ConfigurationError("max_auto_repairs_per_hour must be a positive integer")
+        if (type(self.repair_failure_cooldown_seconds) not in (int, float)
+                or not math.isfinite(self.repair_failure_cooldown_seconds)
+                or self.repair_failure_cooldown_seconds < 0):
+            raise ConfigurationError("repair_failure_cooldown_seconds must be a finite nonnegative number")
         # Explicit constructor/TOML values win; process env wins over cwd/.env.
         load_dotenv(Path.cwd() / ".env", override=False, interpolate=False, encoding="utf-8-sig")
         for field, variable, default, minimum, maximum in (

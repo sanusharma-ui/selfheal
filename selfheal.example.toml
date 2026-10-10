@@ -6,6 +6,9 @@ run_tests = true
 auto_apply = false
 retry_after_repair = true
 max_replacement_bytes = 128000
+# Limits automatic failure-triggered runtime.call/acall repairs (shared sync/async).
+max_auto_repairs_per_hour = 6
+repair_failure_cooldown_seconds = 60
 # Optional overrides; omit to use SELFHEAL_REPAIR_TIMEOUT_SECONDS from .env.
 # repair_timeout_seconds = 180
 # timeout_cleanup_seconds = 5

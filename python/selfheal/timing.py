@@ -17,7 +17,8 @@ _current = ContextVar("selfheal_repair_deadline", default=None)
 # Keep deadlines independent of an application's patched scheduling clock.
 # The watchdog uses the OS clock in a fresh interpreter, so both must agree.
 _monotonic = time.monotonic
-_SDK_FRAMES = frozenset((__file__, str(Path(__file__).with_name("runtime.py"))))
+_SDK_FRAMES = frozenset(str(Path(__file__).with_name(name)) for name in
+                        ("timing.py", "runtime.py", "_coordination.py", "_async_support.py"))
 
 
 class RepairTimeout(TimeoutError):

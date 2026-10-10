@@ -51,8 +51,10 @@ SelfHeal Runtime performs source-code verification and controlled source replace
   It preserves developer edits. It cannot undo external writes or memory changes,
   and it is not general forced-kill crash recovery. See `docs/TIMING.md`.
 - Scoped activation preserves module state by updating function code rather than
-  re-running initialization. Synchronous module-level functions are supported;
-  wrapper closures, async/generator functions and native callables are rejected.
+  re-running initialization. Synchronous and coroutine module-level functions
+  are supported; wrapper closures, generators (including async generators) and
+  native callables are rejected. Async calls share one owning loop and must use
+  coordinated dispatch; activation waits for admitted calls to finish.
 - Scheduled activation requires `AgentConfig(auto_apply=True)` and safe-to-repeat
   targets. Explicit `heal`/`improve` commands separately authorize activation.
 - Use AI transaction budgets, failure backoff, and target suspension. Pausing the

@@ -17,6 +17,7 @@ uninterruptible timeout can stop it for recovery.
 
 [Get started](#install-and-configure-your-own-api) ·
 [Embed the agent](#embed-it-in-your-running-app) ·
+[Async support](docs/ASYNC.md) ·
 [Terminal controls](#inspect-and-patch-from-the-terminal) ·
 [Time budgets](#configure-the-repair-time-budget) ·
 [Try the calculator](#try-the-isolated-calculator) ·
@@ -31,11 +32,15 @@ uninterruptible timeout can stop it for recovery.
 | **Verify before activation** | The Rust core checks syntax and optional pytest in a copied workspace; candidate health checks run in a separate process. |
 | **See every proposed change** | Terminal diffs, verification results, snapshots and audit records make repairs inspectable. |
 | **Update running functions** | Guarded activation updates function code while preserving module initialization and existing function objects. |
-| **Control time and API usage** | A shared repair deadline, background attempt limits, backoff and suspension bound repair activity. |
+| **Await async functions** | Coroutine calls and safe retries use the app's owning event loop; repair workers coordinate activation with in-flight calls. |
+| **Control time and API usage** | A shared repair deadline, direct-call limits and cooldown, background budgets, backoff and suspension bound repair activity. |
 
 This is a **single-process Python SDK**. Integrate it into your app, register
 editable functions, and route participating calls through its dispatch lock.
 It cannot attach to an arbitrary process or prove every AI patch correct.
+Synchronous and module-level `async def` targets are supported. Async apps use
+`async with agent` and `await agent.bind("target")(...)`; see the
+[async integration guide](docs/ASYNC.md) for loop ownership and cancellation.
 
 ## Install and configure your own API
 
@@ -217,12 +222,13 @@ See [timing behavior and recovery](docs/TIMING.md) for details.
 
 ## Operational boundaries
 
-- Supported targets are synchronous module-level Python functions in writable UTF-8
-  source under the configured project root. Async/generator functions, native
+- Supported targets are synchronous and coroutine module-level Python functions
+  in writable UTF-8 source under the configured project root. Regular/async generators, native
   callables, wrapper closures, class methods and dependency changes are rejected.
 - Register one runtime/agent per owning process. Multi-worker coordination,
   automatic crash recovery after a forced kill and remote-process attachment
-  are not implemented. All participating calls need the runtime's dispatch lock.
+  are not implemented. All participating calls need the runtime's dispatch
+  coordination; async targets share one owning event loop per runtime.
 - Health checks must be pure and safe to repeat. Candidate checks use a disposable
   process and a serializable snapshot of app state. Baseline and activation checks
   remain in-process to preserve live state/identity checks. Neither is a permission
@@ -235,7 +241,8 @@ See [timing behavior and recovery](docs/TIMING.md) for details.
   is disabled and the app must restart.
 - Source and sanitized failure/health context go to the selected provider. Known
   secrets are redacted or rejected; arbitrary personal data needs the developer's
-  own policy. Budget, backoff and suspension bound background AI attempts.
+  own policy. Direct exception repairs have an hourly budget and failure cooldown;
+  the agent separately bounds background AI attempts with budgets, backoff and suspension.
 
 Use only code, accounts and data you are authorized to modify or transmit.
 Review [SECURITY.md](SECURITY.md) and the AI provider's applicable terms before
@@ -265,6 +272,7 @@ build validation. See [the walkthrough and expected results](docs/TIMING.md#comm
 | Resource | Purpose |
 | --- | --- |
 | [Integration guide](docs/AGENT_INTEGRATION.md) | Register targets, define health contracts and embed the background agent. |
+| [Async guide](docs/ASYNC.md) | Coroutine dispatch, live health, cancellation, concurrency and manual regression commands. |
 | [TOML template](selfheal.example.toml) | Configure runtime, scheduling and editable targets. |
 | [Manual testing](MANUAL_TESTING.md) | Set up Windows tooling and walk through the live calculator. |
 | [Timing guide](docs/TIMING.md) | Configure deadlines and exercise the isolated timeout scenarios. |

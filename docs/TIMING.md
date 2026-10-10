@@ -64,6 +64,14 @@ rollback restores source and function code. The previous trace hook is restored
 after each guard, but debugger tracing is temporarily replaced during guarded
 callbacks. Arbitrary native calls cannot safely be interrupted or detached.
 
+Async health checks and retries run on the application's owning event loop.
+They use cooperative task timeouts; the worker never leaves its opcode trace
+installed across an event-loop await. An async callback that blocks the loop,
+runs a CPU loop or suppresses cancellation requires the hard watchdog to bound
+the transaction. With the watchdog disabled, such callbacks can prevent
+completion. Caller cancellation waits for callback cleanup and rollback before
+releasing dispatch admission. See [async integration](ASYNC.md).
+
 With `SELFHEAL_HARD_TIMEOUT=true` (default), an independent process watches the
 hard deadline. If a native call or cleanup cannot finish, it terminates **the
 owning application process**, not just a thread. Windows reports exit 124;

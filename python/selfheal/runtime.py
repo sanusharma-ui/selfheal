@@ -1,14 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from collections import deque
 from contextlib import contextmanager
 from difflib import unified_diff
-from threading import RLock
+from threading import Lock
 from types import ModuleType
 from typing import Any
+import asyncio
 import importlib
+import inspect as inspection
+import time
 import uuid
 
+from ._async_support import (AsyncOperation, AsyncUsageError, RepairCancelled, callback_runtime,
+                             close_coroutine, operation, require_sync_api, run_worker)
+from ._coordination import InvocationGate
 from .config import SelfHealConfig
 from .languages import PythonRuntimeAdapter
 from .models import (FailureContext, HealthCheckResult, HealthReport, RepairEvent,
@@ -34,8 +41,8 @@ class SelfHealRuntime:
     """One protected operation, one candidate, one explicitly safe retry.
 
     reviewer receives a frozen review and must return exactly True to approve.
-    Calls through this instance are serialized. Other runtimes/workers and direct
-    calls are outside this lock; multi-worker activation remains unsupported.
+    Coroutine calls share admission; sync calls and activation are exclusive.
+    Other runtimes/workers and direct calls are outside this gate.
     """
 
     def __init__(self, config: SelfHealConfig, *, provider: AIProvider | None = None,
@@ -49,7 +56,12 @@ class SelfHealRuntime:
         self.registry = FunctionRegistry()
         self.language = PythonRuntimeAdapter()
         self.last_result: RepairResult | None = None
-        self._lock = RLock()
+        self._gate = InvocationGate()
+        self._async_worker_slot = Lock()
+        self._loop_lock = Lock()
+        self._async_loop = None
+        self._auto_attempts = deque()
+        self._auto_backoff = {}
         self._healing = False
         self._disabled = False
         self.core = CoreEngine(str(self.project_root), config.python_executable,
@@ -60,30 +72,219 @@ class SelfHealRuntime:
 
     @contextmanager
     def _locked(self):
-        budget = current_deadline()
-        if budget is None:
-            self._lock.acquire()
-        elif not self._lock.acquire(timeout=budget.remaining()):
-            raise RepairTimeout("Repair deadline exceeded waiting for the application lock; no patch applied.")
-        try:
+        with self._gate.sync(check=lambda: self._check("application lock")):
             yield
-        finally:
-            self._lock.release()
 
     def _check(self, stage):
+        bridge = operation.get()
+        if bridge is not None:
+            bridge.checkpoint()
         budget = current_deadline()
         if budget is not None:
             budget.check(stage)
 
-    def _guard(self, callback, stage):
+    def _guard(self, callback, stage, *, allow_async=False):
+        self._check(stage)
         budget = current_deadline()
-        return callback() if budget is None else budget.run(callback, stage)
+        token = callback_runtime.set(self)
+        value = None
+
+        def invoke_callback():
+            nonlocal value
+            value = callback()
+            return value
+
+        try:
+            if budget is None:
+                invoke_callback()
+            else:
+                budget.run(invoke_callback, stage)
+        except BaseException:
+            # The opcode guard can expire just after a coroutine was created.
+            close_coroutine(value)
+            raise
+        finally:
+            callback_runtime.reset(token)
+        if inspection.isawaitable(value):
+            if not allow_async:
+                close_coroutine(value)
+                raise AsyncUsageError(f"{stage} must be a synchronous callback")
+            if budget is None or self._async_loop is None or not self._async_loop.is_running():
+                close_coroutine(value)
+                raise AsyncUsageError("Async callbacks require an attached running loop; use acheck_health/ainspect or async with agent")
+            if budget._running:
+                close_coroutine(value)
+                raise AsyncUsageError("An async callback cannot be nested inside a guarded synchronous callback")
+            bridge = operation.get() or AsyncOperation(self._async_loop, self)
+            value = bridge.await_result(value, budget, stage)
+        self._check(stage)
+        return value
+
+    def _sync_entry(self, async_name, *, dispatch=False):
+        require_sync_api(async_name)
+        if not (dispatch and self._gate.owns_sync()):
+            self._callback_entry()
+        if self._gate.in_async_call():
+            raise RuntimeError("A protected coroutine cannot wait for synchronous runtime dispatch")
+
+    def _callback_entry(self):
+        if callback_runtime.get() is self:
+            raise RuntimeError("Repair callbacks must call module functions directly, not reenter runtime dispatch")
+
+    def attach_async_loop(self):
+        """Attach this runtime to one running application loop for its lifetime."""
+        loop = asyncio.get_running_loop()
+        with self._loop_lock:
+            if self._async_loop is not None and self._async_loop is not loop:
+                raise RuntimeError("A runtime can belong to only one asyncio event loop")
+            self._async_loop = loop
+        return self
+
+    def _async_entry(self, *, repair=False):
+        self._callback_entry()
+        self.attach_async_loop()
+        if repair and self._gate.in_async_call():
+            raise RuntimeError("An active protected coroutine cannot start a nested repair or health inspection")
+
+    def _sync_target(self, module_name, symbol_name):
+        function = self.handle(module_name, symbol_name).resolve()
+        if inspection.iscoroutinefunction(function) or inspection.isasyncgenfunction(function):
+            raise TypeError("Use ainvoke/acall or an async agent binding for coroutine targets")
+        return function
+
+    def _auto_admit(self, key):
+        now = time.monotonic()
+        while self._auto_attempts and self._auto_attempts[0] <= now - 3600:
+            self._auto_attempts.popleft()
+        if self._auto_backoff.get(key, 0) > now:
+            return RepairResult(False, message="Automatic repair is cooling down after a failed attempt.", status="cooldown")
+        if len(self._auto_attempts) >= self.config.max_auto_repairs_per_hour:
+            return RepairResult(False, message="Hourly automatic repair budget reached.", status="budget_limited")
+        self._auto_attempts.append(now)
+        return None
+
+    def _auto_finished(self, key, result):
+        now = time.monotonic()
+        self._auto_backoff = {name: until for name, until in self._auto_backoff.items() if until > now}
+        if result.healed:
+            self._auto_backoff.pop(key, None)
+        else:
+            self._auto_backoff[key] = now + self.config.repair_failure_cooldown_seconds
 
     def invoke(self, *, module_name: str, symbol_name: str,
                args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> Any:
         """Dispatch current code under the activation lock, without automatic repair."""
+        self._sync_entry("await runtime.ainvoke(...)", dispatch=True)
         with self._locked():
-            return self.handle(module_name, symbol_name)(*args, **(kwargs or {}))
+            return self._sync_target(module_name, symbol_name)(*args, **(kwargs or {}))
+
+    async def ainvoke(self, *, module_name: str, symbol_name: str,
+                      args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> Any:
+        """Await current code on the caller loop, participating in activation."""
+        self._async_entry()
+        async with self._gate.async_call():
+            function = self.handle(module_name, symbol_name).resolve()
+            if not inspection.iscoroutinefunction(function):
+                raise TypeError("ainvoke/acall require a module-level coroutine function")
+            return await function(*args, **(kwargs or {}))
+
+    async def acall(self, *, module_name: str, symbol_name: str,
+                    args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None,
+                    retry_safe: bool = False) -> Any:
+        """One awaited operation, one bounded repair, one explicitly safe retry."""
+        self._async_entry()
+        nested = self._gate.in_async_call()
+        async with self._gate.async_call():
+            function = self.handle(module_name, symbol_name).resolve()
+            if not inspection.iscoroutinefunction(function):
+                raise TypeError("ainvoke/acall require a module-level coroutine function")
+            original_code = function.__code__
+            try:
+                return await function(*args, **(kwargs or {}))
+            except Exception as exc:
+                failure = exc
+                if nested:
+                    raise  # Only the outer operation may own a repair.
+        # No application coroutine is held by this task while the writer drains
+        # other calls. CancelledError (a BaseException) never enters this path.
+        try:
+            result = await run_worker(self, lambda: self._repair_async_failure(
+                failure, module_name, symbol_name, args, kwargs or {}, retry_safe, original_code))
+        except RepairTimeout as error:
+            result = RepairResult(False, message=str(error), status="timed_out")
+            self.last_result = result
+        except Exception as error:
+            result = RepairResult(False, message=f"Healing stopped ({type(error).__name__}). Original exception preserved.")
+            self.last_result = result
+        if result.healed:
+            return result.return_value
+        failure.add_note(result.message)
+        raise failure.with_traceback(failure.__traceback__)
+
+    def _repair_async_failure(self, exc, module_name, symbol_name, args, kwargs, retry_safe, original_code):
+        result = None
+        try:
+            with RepairDeadline(self.config):
+                with self._locked():
+                    if self._healing or self._disabled:
+                        return RepairResult(False, message="Healing disabled or another repair is active.", status="busy")
+                    if self.handle(module_name, symbol_name).resolve().__code__ is not original_code:
+                        return RepairResult(False, message="The failed code was already replaced; request not replayed.", status="superseded")
+                    key = (module_name, symbol_name)
+                    limited = self._auto_admit(key)
+                    if limited is not None:
+                        self.last_result = limited
+                        return limited
+                    self._healing = True
+                    try:
+                        result = self._heal(exc=exc, module_name=module_name, symbol_name=symbol_name,
+                                            args=args, kwargs=kwargs, retry_safe=retry_safe)
+                    except RepairCancelled as error:
+                        result = RepairResult(False, message=str(error), status="cancelled")
+                    except RepairTimeout as error:
+                        result = RepairResult(False, message=str(error), status="timed_out")
+                    except Exception as error:
+                        result = RepairResult(False, message=f"Healing stopped ({type(error).__name__}). Original exception preserved.")
+                    finally:
+                        self._healing = False
+                        if result is not None:
+                            self.last_result = result
+                            self._auto_finished(key, result)
+                    if result.status not in ("cancelled", "timed_out"):
+                        try:
+                            self._emit("complete", result.message, proposal_id=result.proposal_id)
+                        except (RepairTimeout, RepairCancelled):
+                            pass
+                    return result
+        except (RepairCancelled, RepairTimeout) as error:
+            result = RepairResult(False, message=str(error),
+                                  status="cancelled" if isinstance(error, RepairCancelled) else "timed_out")
+            self.last_result = result
+            return result
+
+    async def acheck_health(self, module_name: str,
+                            check: Callable[[ModuleType], HealthReport | Awaitable[HealthReport]]) -> HealthReport:
+        self._async_entry(repair=True)
+        return await run_worker(self, lambda: self.check_health(module_name, check))
+
+    async def ainspect(self, *, module_name: str, symbol_name: str,
+                       health_check: Callable[[ModuleType], HealthReport | Awaitable[HealthReport]],
+                       retry_safe: bool = False, operation: str = "heal",
+                       instructions: str = "", editable_symbols: tuple[str, ...] = (),
+                       observed_failure: str = "", apply: bool = False,
+                       on_event: Callable[[RepairEvent], None] | None = None) -> RepairResult:
+        """Run inspection off the loop; await live health checks on this loop."""
+        self._async_entry(repair=True)
+        try:
+            return await run_worker(self, lambda: self.inspect(
+                module_name=module_name, symbol_name=symbol_name, health_check=health_check,
+                retry_safe=retry_safe, operation=operation, instructions=instructions,
+                editable_symbols=editable_symbols, observed_failure=observed_failure,
+                apply=apply, on_event=on_event))
+        except RepairTimeout as error:
+            result = RepairResult(False, message=str(error), status="timed_out")
+            self.last_result = result
+            return result
 
     @property
     def healing_disabled(self) -> bool:
@@ -95,7 +296,7 @@ class SelfHealRuntime:
             if sink is not None:
                 try:
                     self._guard(lambda: sink(event), "event callback")
-                except RepairTimeout:
+                except (RepairTimeout, RepairCancelled):
                     raise
                 except Exception:
                     # A disconnected terminal must not interrupt recovery.
@@ -105,26 +306,29 @@ class SelfHealRuntime:
         try:
             report = self._guard(
                 lambda: check(module if module is not None else importlib.import_module(module_name)),
-                "live health checks")
+                "live health checks", allow_async=True)
             if not isinstance(report, HealthReport) or any(
                 not isinstance(item, HealthCheckResult) for item in report.checks
             ):
+                close_coroutine(report)
                 raise TypeError("health_check must return a HealthReport")
             return report
-        except RepairTimeout:
+        except (RepairTimeout, RepairCancelled, AsyncUsageError):
             raise
         except Exception as exc:
             return HealthReport((HealthCheckResult(
                 "health callback", False, redact(f"{type(exc).__name__}: {exc}")),))
 
-    def check_health(self, module_name: str, check: Callable[[ModuleType], HealthReport]) -> HealthReport:
+    def check_health(self, module_name: str,
+                     check: Callable[[ModuleType], HealthReport | Awaitable[HealthReport]]) -> HealthReport:
         """Run local developer checks without making an AI request or mutating source."""
+        self._sync_entry("await runtime.acheck_health(...)")
         with RepairDeadline(self.config):
             with self._locked():
                 return self._health(module_name, check)
 
     def inspect(self, *, module_name: str, symbol_name: str,
-                health_check: Callable[[ModuleType], HealthReport],
+                health_check: Callable[[ModuleType], HealthReport | Awaitable[HealthReport]],
                 retry_safe: bool = False, operation: str = "heal",
                 instructions: str = "", editable_symbols: tuple[str, ...] = (),
                 observed_failure: str = "",
@@ -135,14 +339,16 @@ class SelfHealRuntime:
         Candidate checks use a disposable state snapshot; activation checks remain
         live. apply=True is explicit authorization; preview never changes source.
         """
+        self._sync_entry("await runtime.ainspect(...)")
         try:
             with RepairDeadline(self.config):
                 return self._inspect(module_name=module_name, symbol_name=symbol_name,
                     health_check=health_check, retry_safe=retry_safe, operation=operation,
                     instructions=instructions, editable_symbols=editable_symbols,
                     observed_failure=observed_failure, apply=apply, on_event=on_event)
-        except RepairTimeout as exc:
-            result = RepairResult(False, message=str(exc), status="timed_out")
+        except (RepairTimeout, RepairCancelled) as exc:
+            result = RepairResult(False, message=str(exc),
+                                  status="cancelled" if isinstance(exc, RepairCancelled) else "timed_out")
             self.last_result = result
             return result
 
@@ -217,8 +423,9 @@ class SelfHealRuntime:
             result = self._repair(request, original, confirm=confirm, retry_safe=retry_safe,
                                   auto_apply=apply, preview=not apply, on_event=on_event,
                                   health_check=health_check)
-        except RepairTimeout as exc:
-            result = RepairResult(False, message=str(exc), status="timed_out")
+        except (RepairTimeout, RepairCancelled) as exc:
+            result = RepairResult(False, message=str(exc),
+                                  status="cancelled" if isinstance(exc, RepairCancelled) else "timed_out")
         except CandidateIsolationError as exc:
             result = RepairResult(False, message=str(exc), status="failed")
         except Exception as exc:
@@ -231,23 +438,31 @@ class SelfHealRuntime:
             self._healing = False
             if "result" in locals():
                 self.last_result = result
-        if result.status != "timed_out":
+        if result.status not in ("timed_out", "cancelled"):
             try:
                 self._emit("complete", result.message, proposal_id=result.proposal_id, on_event=on_event)
-            except RepairTimeout:
+            except (RepairTimeout, RepairCancelled):
                 pass  # Completion reporting cannot change an already final result.
         return result
 
     def call(self, *, module_name: str, symbol_name: str,
              args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None,
              retry_safe: bool = False) -> Any:
+        self._sync_entry("await runtime.acall(...)", dispatch=True)
         with self._locked():
+            function = self._sync_target(module_name, symbol_name)
             if self._healing or self._disabled:
-                return self.handle(module_name, symbol_name)(*args, **(kwargs or {}))
+                return function(*args, **(kwargs or {}))
             self.last_result = None
             try:
-                return self.handle(module_name, symbol_name)(*args, **(kwargs or {}))
+                return function(*args, **(kwargs or {}))
             except Exception as exc:
+                key = (module_name, symbol_name)
+                limited = self._auto_admit(key)
+                if limited is not None:
+                    self.last_result = limited
+                    exc.add_note(limited.message)
+                    raise
                 self._healing = True
                 try:
                     # Normal app execution is not timed. The repair budget starts
@@ -265,6 +480,8 @@ class SelfHealRuntime:
                     )
                 finally:
                     self._healing = False
+                    if self.last_result is not None:
+                        self._auto_finished(key, self.last_result)
                 if self.last_result.healed:
                     self._emit("complete", self.last_result.message, proposal_id=self.last_result.proposal_id)
                     return self.last_result.return_value
@@ -293,7 +510,8 @@ class SelfHealRuntime:
         self._emit("failure_detected", f"{module_name}.{symbol_name}: {failure.exception_type}")
         return self._repair(RepairRequest(failure, source, self.project_root,
                                          editable_symbols=(symbol_name,)), original,
-                            confirm=lambda: self.handle(module_name, symbol_name)(*args, **kwargs),
+                            confirm=lambda: self._guard(
+                                lambda: self.handle(module_name, symbol_name)(*args, **kwargs), "live retry", allow_async=True),
                             retry_safe=retry_safe, auto_apply=self.config.auto_apply)
 
     def _repair(self, request, original, *, confirm, retry_safe,
@@ -413,7 +631,9 @@ class SelfHealRuntime:
                 self.language.activate(module_name, request.editable_symbols)
                 self._emit("patch_applied", f"Updated {module_name} functions; snapshot: {receipt.snapshot_file}",
                            proposal_id=proposal_id, on_event=on_event)
-                value = self._guard(confirm, "live confirmation/retry")
+                # confirm orchestrates health/retry; each user callback guards
+                # itself. Never trace a thread while it waits for the app loop.
+                value = confirm()
                 if any(getattr(module, name, None) is not function for name, function in original_bindings.items()):
                     raise RuntimeError("An editable function was rebound during activation checks")
                 if target.read_bytes() != replacement.encode("utf-8"):
@@ -422,7 +642,7 @@ class SelfHealRuntime:
                 self.core.commit(receipt.target_file, receipt.proposal_id)
                 budget.committed()
             except BaseException as retry_exc:
-                reason = str(retry_exc) if isinstance(retry_exc, RepairTimeout) else \
+                reason = str(retry_exc) if isinstance(retry_exc, (RepairTimeout, RepairCancelled)) else \
                     f"Activation, retry or commit failed ({type(retry_exc).__name__})."
                 with budget.cleanup():
                     # Restore first. Terminal callbacks must never delay recovery.
@@ -449,10 +669,11 @@ class SelfHealRuntime:
                 if not isinstance(retry_exc, Exception):
                     raise
                 return stopped(reason, "disabled" if self._disabled else
-                               ("timed_out" if isinstance(retry_exc, RepairTimeout) else "rolled_back"), receipt.snapshot_file)
+                               ("timed_out" if isinstance(retry_exc, RepairTimeout) else
+                                "cancelled" if isinstance(retry_exc, RepairCancelled) else "rolled_back"), receipt.snapshot_file)
         message = "Repair verified, activated and retry confirmed." if request.operation == "repair" else "Live patch committed after all developer health checks passed."
         try:
             self._emit("committed", message, proposal_id=proposal_id, on_event=on_event)
-        except RepairTimeout:
+        except (RepairTimeout, RepairCancelled):
             pass
         return RepairResult(True, proposal_id, message, value, review, "applied", receipt.snapshot_file)
