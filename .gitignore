@@ -6,7 +6,10 @@ __pycache__/
 *.dylib
 .venv/
 venv/
+# Local credentials and environment overrides; keep the public template.
 .env
+.env.*
+!.env.example
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

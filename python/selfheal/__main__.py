@@ -49,12 +49,15 @@ def main(argv=None) -> int:
     if args.command == "check-config":
         from .errors import ConfigurationError
         from .providers import provider_from_env
+        from .config import SelfHealConfig
         try:
+            config = SelfHealConfig(Path.cwd())
             provider = provider_from_env()
         except (ConfigurationError, OSError) as exc:
             print(f"Configuration error: {exc}")
             return 2
         print(f"Configuration loaded: {type(provider).__name__}. Your key and model are configured.")
+        print(f"Repair budget: {config.repair_timeout_seconds:g}s total | hard timeout: {config.hard_timeout}")
         print("No API request made. Account access and model availability are checked on the first request.")
         return 0
     if not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -83,6 +86,8 @@ def main(argv=None) -> int:
                 data = json.loads(response.read(64_000))
                 print(f"Running process: {data['pid']} | busy: {data['busy']} | disabled: {data['healing_disabled']}")
                 print("Registered targets:", ", ".join(data["targets"]))
+                if data.get("repair_timeout_seconds") is not None:
+                    print(f"Repair budget: {data['repair_timeout_seconds']:g}s | hard timeout: {data['hard_timeout']}")
                 if data["last_result"]:
                     result = data["last_result"]
                     reporter(RepairEvent(result["status"], result["message"], result.get("proposal_id")))

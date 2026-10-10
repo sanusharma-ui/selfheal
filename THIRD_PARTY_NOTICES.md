@@ -8,7 +8,7 @@ MIT is selected when offered, retaining any additional Unicode terms;
 Apache-only crates retain their stated exceptions. Upstream notices and
 license texts are reproduced below without changing their terms.
 
-The Python dependency python-dotenv and optional pytest are separately
+The Python dependencies python-dotenv, cloudpickle and optional pytest are separately
 installed distributions; their own license notices ship with them.
 No API keys, models or proprietary provider SDKs are distributed here.
 

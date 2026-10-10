@@ -1,20 +1,54 @@
 # SelfHeal Runtime
 
-SelfHeal is a Python SDK that helps an integrated running application repair
-registered functions using a developer-configured AI API. It observes exceptions
-and developer health checks, requests a minimal patch, verifies it, updates the
-running function bodies, and restores the previous source and function code if
-activation fails. The application's process stays running.
+> AI-assisted repair for running Python applications, with verification and developer control.
 
-This is a **beta, single-process SDK**. Register the functions you permit it to
-edit, define the behavior your checks must protect, and route calls through the
-SDK. SelfHeal cannot attach to an arbitrary process or prove every AI patch correct.
-Only Python is supported. The Rust core handles source policy, copied-workspace
-verification, snapshots, file replacement and audit records.
+**Python 3.11+** &nbsp;·&nbsp; **Rust core** &nbsp;·&nbsp; **Beta** &nbsp;·&nbsp; **Review by default**
+
+SelfHeal embeds a repair agent in your application. When a registered function
+raises an exception or fails a developer-defined health check, it asks your AI
+provider for a scoped patch, verifies the candidate, and presents it for review.
+Authorized patches update live function bodies without re-running module
+initialization. If activation fails, SelfHeal attempts to restore the previous
+source and function code.
+
+You choose **what can change, what correctness means, and when a patch may apply**.
+Successful live repairs keep the application's process running; an
+uninterruptible timeout can stop it for recovery.
+
+[Get started](#install-and-configure-your-own-api) ·
+[Embed the agent](#embed-it-in-your-running-app) ·
+[Terminal controls](#inspect-and-patch-from-the-terminal) ·
+[Time budgets](#configure-the-repair-time-budget) ·
+[Try the calculator](#try-the-isolated-calculator) ·
+[Security](SECURITY.md)
+
+## What you get
+
+| Capability | How it works |
+| --- | --- |
+| **Detect exceptions and wrong results** | Routed calls report failures; your health checks define expected behavior. |
+| **Keep edits scoped** | Only registered function bodies may change. Imports, signatures and other definitions stay protected. |
+| **Verify before activation** | The Rust core checks syntax and optional pytest in a copied workspace; candidate health checks run in a separate process. |
+| **See every proposed change** | Terminal diffs, verification results, snapshots and audit records make repairs inspectable. |
+| **Update running functions** | Guarded activation updates function code while preserving module initialization and existing function objects. |
+| **Control time and API usage** | A shared repair deadline, background attempt limits, backoff and suspension bound repair activity. |
+
+This is a **single-process Python SDK**. Integrate it into your app, register
+editable functions, and route participating calls through its dispatch lock.
+It cannot attach to an arbitrary process or prove every AI patch correct.
 
 ## Install and configure your own API
 
-After the release is published, install the SDK into your application's environment:
+From a repository checkout, install into your application's Python environment:
+
+```shell
+python -m pip install -e ".[dev]"
+```
+
+Source installations require Rust and platform C/C++ build prerequisites.
+See [Windows setup and manual testing](MANUAL_TESTING.md) for toolchain guidance.
+
+Once a release is published to PyPI, the package installation command is:
 
 ```shell
 python -m pip install "selfheal-runtime[verification]"
@@ -158,6 +192,29 @@ HTTP retries, and validate the JSON proposal. Model output cannot directly write
 files or issue shell commands. A custom `AIProvider` can be explicitly injected;
 the deterministic mock exists for offline tests and is never an automatic fallback.
 
+## Configure the repair time budget
+
+Set the complete repair budget in your application's working-directory `.env`:
+
+```dotenv
+SELFHEAL_REPAIR_TIMEOUT_SECONDS=180
+SELFHEAL_TIMEOUT_CLEANUP_SECONDS=5
+SELFHEAL_HARD_TIMEOUT=true
+```
+
+One deadline covers provider retries, verification, review, activation and live
+retry. Each stage uses the time remaining; it does not start a fresh budget.
+Cleanup is reserved **inside** the total, capped at 10% of that total.
+With the defaults, work has 175 seconds and cleanup has the remaining 5 seconds.
+
+Explicit SDK/TOML settings override process environment variables, which override
+`.env`. Recreate the runtime or restart your app after changing settings.
+
+The enabled hard-timeout watchdog can **terminate the owning application** if
+native code cannot unwind. A supervisor or maintainer must restart it after
+recovery finishes. Disabling it removes that bound on native stalls.
+See [timing behavior and recovery](docs/TIMING.md) for details.
+
 ## Operational boundaries
 
 - Supported targets are synchronous module-level Python functions in writable UTF-8
@@ -166,12 +223,13 @@ the deterministic mock exists for offline tests and is never an automatic fallba
 - Register one runtime/agent per owning process. Multi-worker coordination,
   automatic crash recovery after a forced kill and remote-process attachment
   are not implemented. All participating calls need the runtime's dispatch lock.
-- Health checks must be pure, bounded and safe to repeat. Candidate checks use a
-  separate function/module view with shared application objects; this is not a
-  sandbox. Checks and patched functions execute with the app's permissions.
-- Rust verification subprocesses have a 120 second deadline per invocation and
-  bounded captured diagnostics. Child process trees, in-process health checks
-  and HTTP streaming do not have a whole-transaction deadline.
+- Health checks must be pure and safe to repeat. Candidate checks use a disposable
+  process and a serializable snapshot of app state. Baseline and activation checks
+  remain in-process to preserve live state/identity checks. Neither is a permission
+  sandbox; external side effects remain possible.
+- Timeouts interrupt guarded Python loops and terminate candidate/verification
+  process trees. The hard watchdog can stop the owning app on a native stall.
+  Deadlines are not a real-time OS guarantee; recovery I/O can take additional time.
 - Rollback restores source and function code. It cannot undo external writes,
   arbitrary shared-state changes or side effects. If restoration fails, healing
   is disabled and the app must restart.
@@ -184,13 +242,38 @@ Review [SECURITY.md](SECURITY.md) and the AI provider's applicable terms before
 enabling automatic patches. Passing checks is evidence about the registered
 contracts, not a guarantee of correctness or legal compliance.
 
+## Try the isolated calculator
+
+After installing the current checkout, run this from the repository root:
+
+```shell
+python scripts/run_timing_calculator.py --scenario all --timeout 10
+```
+
+The fixture starts with broken subtraction and zero division, then exercises
+repair, candidate timeout, live-retry rollback, a shared-budget timeout and a hard
+timeout. It uses a deterministic offline provider by default, with **no API
+request**. Disposable calculator files stay under ignored `.selfheal/manual-timing/`;
+the SDK never imports the fixture.
+
+Expected final output: `MANUAL CALCULATOR: PASS`. This is a maintainer-run
+validation command; the current timing changes still require runtime and native
+build validation. See [the walkthrough and expected results](docs/TIMING.md#commands-for-you-to-run).
+
 ## Development and release
 
-See [integration](docs/AGENT_INTEGRATION.md), [TOML configuration](selfheal.example.toml),
-[manual testing](MANUAL_TESTING.md), [release commands](docs/RELEASING.md), and
-[changes](CHANGELOG.md). `examples/live_calculator.py` is a deliberately broken
-manual fixture; it is not the SDK. The release workflow is manually started by
-the maintainer and only produces artifacts. No PyPI upload is automatic.
+| Resource | Purpose |
+| --- | --- |
+| [Integration guide](docs/AGENT_INTEGRATION.md) | Register targets, define health contracts and embed the background agent. |
+| [TOML template](selfheal.example.toml) | Configure runtime, scheduling and editable targets. |
+| [Manual testing](MANUAL_TESTING.md) | Set up Windows tooling and walk through the live calculator. |
+| [Timing guide](docs/TIMING.md) | Configure deadlines and exercise the isolated timeout scenarios. |
+| [Release guide](docs/RELEASING.md) | Build and validate distribution artifacts before publication. |
+| [Changelog](CHANGELOG.md) | Review version history. |
+
+`examples/live_calculator.py` is a deliberately broken manual fixture. The release
+workflow is manually started by the maintainer and only produces artifacts.
+No PyPI upload is automatic.
 
 Original source is [MIT licensed](LICENSE). Bundled dependency terms and retained
 copyright notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

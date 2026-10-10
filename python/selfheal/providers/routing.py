@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from selfheal.errors import ConfigurationError
+from selfheal.timing import checkpoint
 
 from .base import AIProvider
 from .compatible import OpenAICompatibleProvider
@@ -34,6 +35,7 @@ class FallbackProvider(AIProvider):
 
     def propose_repair(self, request):
         for provider in self.providers:
+            checkpoint("provider fallback")
             try:
                 return provider.propose_repair(request)
             except ProviderUnavailable:

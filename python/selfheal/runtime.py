@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from difflib import unified_diff
 from threading import RLock
 from types import ModuleType
@@ -17,6 +18,8 @@ from .privacy import redact
 from .providers import AIProvider, provider_from_env
 from .registry import FunctionRegistry
 from .scope import validate_edit_scope
+from .health_worker import CandidateIsolationError, candidate_health
+from .timing import RepairDeadline, RepairTimeout, current_deadline
 
 try:
     from ._core import CoreEngine
@@ -55,10 +58,31 @@ class SelfHealRuntime:
     def handle(self, module_name: str, symbol_name: str):
         return self.registry.handle(module_name, symbol_name)
 
+    @contextmanager
+    def _locked(self):
+        budget = current_deadline()
+        if budget is None:
+            self._lock.acquire()
+        elif not self._lock.acquire(timeout=budget.remaining()):
+            raise RepairTimeout("Repair deadline exceeded waiting for the application lock; no patch applied.")
+        try:
+            yield
+        finally:
+            self._lock.release()
+
+    def _check(self, stage):
+        budget = current_deadline()
+        if budget is not None:
+            budget.check(stage)
+
+    def _guard(self, callback, stage):
+        budget = current_deadline()
+        return callback() if budget is None else budget.run(callback, stage)
+
     def invoke(self, *, module_name: str, symbol_name: str,
                args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> Any:
         """Dispatch current code under the activation lock, without automatic repair."""
-        with self._lock:
+        with self._locked():
             return self.handle(module_name, symbol_name)(*args, **(kwargs or {}))
 
     @property
@@ -70,27 +94,34 @@ class SelfHealRuntime:
         for sink in (self.event_sink, on_event):
             if sink is not None:
                 try:
-                    sink(event)
+                    self._guard(lambda: sink(event), "event callback")
+                except RepairTimeout:
+                    raise
                 except Exception:
                     # A disconnected terminal must not interrupt recovery.
                     pass
 
     def _health(self, module_name, check, *, module=None) -> HealthReport:
         try:
-            report = check(module if module is not None else importlib.import_module(module_name))
+            report = self._guard(
+                lambda: check(module if module is not None else importlib.import_module(module_name)),
+                "live health checks")
             if not isinstance(report, HealthReport) or any(
                 not isinstance(item, HealthCheckResult) for item in report.checks
             ):
                 raise TypeError("health_check must return a HealthReport")
             return report
+        except RepairTimeout:
+            raise
         except Exception as exc:
             return HealthReport((HealthCheckResult(
                 "health callback", False, redact(f"{type(exc).__name__}: {exc}")),))
 
     def check_health(self, module_name: str, check: Callable[[ModuleType], HealthReport]) -> HealthReport:
         """Run local developer checks without making an AI request or mutating source."""
-        with self._lock:
-            return self._health(module_name, check)
+        with RepairDeadline(self.config):
+            with self._locked():
+                return self._health(module_name, check)
 
     def inspect(self, *, module_name: str, symbol_name: str,
                 health_check: Callable[[ModuleType], HealthReport],
@@ -99,6 +130,24 @@ class SelfHealRuntime:
                 observed_failure: str = "",
                 apply: bool = False,
                 on_event: Callable[[RepairEvent], None] | None = None) -> RepairResult:
+        """Inspect a registered target within one configured repair deadline.
+
+        Candidate checks use a disposable state snapshot; activation checks remain
+        live. apply=True is explicit authorization; preview never changes source.
+        """
+        try:
+            with RepairDeadline(self.config):
+                return self._inspect(module_name=module_name, symbol_name=symbol_name,
+                    health_check=health_check, retry_safe=retry_safe, operation=operation,
+                    instructions=instructions, editable_symbols=editable_symbols,
+                    observed_failure=observed_failure, apply=apply, on_event=on_event)
+        except RepairTimeout as exc:
+            result = RepairResult(False, message=str(exc), status="timed_out")
+            self.last_result = result
+            return result
+
+    def _inspect(self, *, module_name, symbol_name, health_check, retry_safe,
+                 operation, instructions, editable_symbols, observed_failure, apply, on_event):
         """Inspect running code on command, including silent logic bugs.
 
         apply=True is explicit command authorization. Health checks are trusted,
@@ -123,14 +172,15 @@ class SelfHealRuntime:
         ) or len(set(editable_symbols)) != len(editable_symbols):
             raise ValueError("editable_symbols must contain unique function names")
         editable_symbols = editable_symbols or (symbol_name,)
-        with self._lock:
+        with self._locked():
             if self._disabled or self._healing:
                 return RepairResult(False, message="Healing disabled or another repair is active.", status="busy")
             if apply and (retry_safe is not True or not self.config.retry_after_repair):
                 return RepairResult(False, message="Activation requires retry_safe=True and retry_after_repair=True.")
             self._healing = True
         try:
-            with self._lock:
+            with self._locked():
+                self._check("source preparation")
                 target = self.language.source_file(module_name).resolve()
                 target.relative_to(self.project_root)
                 if target.suffix != ".py":
@@ -167,22 +217,31 @@ class SelfHealRuntime:
             result = self._repair(request, original, confirm=confirm, retry_safe=retry_safe,
                                   auto_apply=apply, preview=not apply, on_event=on_event,
                                   health_check=health_check)
+        except RepairTimeout as exc:
+            result = RepairResult(False, message=str(exc), status="timed_out")
+        except CandidateIsolationError as exc:
+            result = RepairResult(False, message=str(exc), status="failed")
         except Exception as exc:
             result = RepairResult(False, message=redact(
                 f"Live inspection stopped ({type(exc).__name__}). Source activation was not completed."
             ), status="failed")
         finally:
-            with self._lock:
-                self._healing = False
-                if "result" in locals():
-                    self.last_result = result
-        self._emit("complete", result.message, proposal_id=result.proposal_id, on_event=on_event)
+            # This flag is owned by the repairing thread; do not reacquire an
+            # expired lock to clear it. Concurrent callers observe it under lock.
+            self._healing = False
+            if "result" in locals():
+                self.last_result = result
+        if result.status != "timed_out":
+            try:
+                self._emit("complete", result.message, proposal_id=result.proposal_id, on_event=on_event)
+            except RepairTimeout:
+                pass  # Completion reporting cannot change an already final result.
         return result
 
     def call(self, *, module_name: str, symbol_name: str,
              args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None,
              retry_safe: bool = False) -> Any:
-        with self._lock:
+        with self._locked():
             if self._healing or self._disabled:
                 return self.handle(module_name, symbol_name)(*args, **(kwargs or {}))
             self.last_result = None
@@ -191,10 +250,15 @@ class SelfHealRuntime:
             except Exception as exc:
                 self._healing = True
                 try:
-                    self.last_result = self._heal(
-                        exc=exc, module_name=module_name, symbol_name=symbol_name,
-                        args=args, kwargs=kwargs or {}, retry_safe=retry_safe,
-                    )
+                    # Normal app execution is not timed. The repair budget starts
+                    # when its original exception is captured, including the retry.
+                    with RepairDeadline(self.config):
+                        self.last_result = self._heal(
+                            exc=exc, module_name=module_name, symbol_name=symbol_name,
+                            args=args, kwargs=kwargs or {}, retry_safe=retry_safe,
+                        )
+                except RepairTimeout as timeout_exc:
+                    self.last_result = RepairResult(False, message=str(timeout_exc), status="timed_out")
                 except Exception as healing_exc:
                     self.last_result = RepairResult(
                         healed=False, message=f"Healing stopped ({type(healing_exc).__name__}). Original exception preserved.",
@@ -212,6 +276,7 @@ class SelfHealRuntime:
         self.core.record_repair_event(str(target), proposal_id, event, redact(details))
 
     def _heal(self, *, exc, module_name, symbol_name, args, kwargs, retry_safe) -> RepairResult:
+        self._check("exception capture")
         target = self.language.source_file(module_name).resolve()
         target.relative_to(self.project_root)
         if target.suffix != ".py":
@@ -236,8 +301,10 @@ class SelfHealRuntime:
         target = request.failure.target_file
         source = request.source_code
         module_name = request.failure.module_name
+        budget = current_deadline()
+        self._check("provider generation")
         self._emit("provider_started", f"Asking {type(self.provider).__name__} to inspect {target.name}", on_event=on_event)
-        proposal = self.provider.propose_repair(request)
+        proposal = self._guard(lambda: self.provider.propose_repair(request), "provider generation")
         if proposal is None:
             status = "no_change" if request.failure.exception_type == "LiveInspection" else "failed"
             return RepairResult(False, message="AI provider returned no repair proposal.", status=status)
@@ -268,7 +335,12 @@ class SelfHealRuntime:
             return RepairResult(False, proposal_id, "Source changed while the provider was running.")
         self._emit("verification_started", "Rust is verifying the candidate in a copied workspace.",
                    proposal_id=proposal_id, on_event=on_event)
-        report = self.core.verify(str(target), replacement, proposal_id)
+        try:
+            report = self.core.verify(str(target), replacement, proposal_id, budget.remaining())
+        except Exception:
+            self._check("candidate verification")
+            raise
+        self._check("candidate verification")
         self._emit("verification_finished", report.details, proposal_id=proposal_id, on_event=on_event)
         review = RepairReview(
             proposal_id=proposal_id, target_file=target,
@@ -290,14 +362,15 @@ class SelfHealRuntime:
         if not auto_apply:
             if self.reviewer is None:
                 return stopped("Review required. Inspect last_result.review and configure a reviewer callback.")
-            approved = self.reviewer(review) is True
+            approved = self._guard(lambda: self.reviewer(review), "developer review") is True
             self._event(target, proposal_id, "repair_approved" if approved else "repair_rejected", "Developer review decision")
             if not approved:
                 return stopped("Repair was not approved; source unchanged.")
         if retry_safe is not True or not self.config.retry_after_repair:
             return stopped("Activation requires retry_safe=True and retry_after_repair=True; source unchanged.")
         # All routed calls pause during final verification, swap, health and rollback.
-        with self._lock:
+        with self._locked():
+            self._check("activation preparation")
             if target.read_bytes() != original:
                 return stopped("Source changed after review; candidate discarded.")
             updates = self.language.prepare(module_name, replacement, request.editable_symbols)
@@ -305,17 +378,20 @@ class SelfHealRuntime:
             original_bindings = {name: getattr(module, name) for name in request.editable_symbols}
             if health_check is not None:
                 candidate = self.language.candidate_module(module_name, updates)
-                candidate_health = self._health(module_name, health_check, module=candidate)
-                self._emit("candidate_health", candidate_health.describe(), proposal_id=proposal_id, on_event=on_event)
-                if not candidate_health.ok:
+                candidate_health_report = candidate_health(health_check, candidate, self.project_root, budget)
+                self._emit("candidate_health", candidate_health_report.describe(), proposal_id=proposal_id, on_event=on_event)
+                if not candidate_health_report.ok:
                     return stopped("Candidate failed developer health checks; live source and functions unchanged.")
                 if target.read_bytes() != original:
                     return stopped("Source changed during candidate health checks; candidate discarded.")
             original_codes = [(function, function.__code__) for function, _ in updates]
             self._emit("activation_started", "Final verification, snapshot and source replacement.",
                        proposal_id=proposal_id, on_event=on_event)
+            self._check("final verification")
+            budget.arm_recovery(target, self.project_root / self.config.snapshot_dir / proposal_id /
+                                target.relative_to(self.project_root), original, replacement)
             try:
-                receipt = self.core.verify_and_apply(str(target), replacement, proposal_id, source)
+                receipt = self.core.verify_and_apply(str(target), replacement, proposal_id, source, budget.remaining())
             except BaseException as native_exc:
                 try:
                     source_intact = target.read_bytes() == original
@@ -325,39 +401,58 @@ class SelfHealRuntime:
                     self._disabled = True
                 if not isinstance(native_exc, Exception):
                     raise
+                timed_out = budget.remaining() <= 0
                 return stopped(
+                    "Repair deadline exceeded during final verification; original source unchanged." if timed_out and source_intact else
                     "Native verification/application failed; original source confirmed unchanged." if source_intact else
                     "Native application failed and original source could not be confirmed; healing disabled. Restart the application.",
-                    "failed" if source_intact else "disabled",
+                    ("timed_out" if timed_out else "failed") if source_intact else "disabled",
                 )
             try:
+                self._check("function activation")
                 self.language.activate(module_name, request.editable_symbols)
                 self._emit("patch_applied", f"Updated {module_name} functions; snapshot: {receipt.snapshot_file}",
                            proposal_id=proposal_id, on_event=on_event)
-                value = confirm()
+                value = self._guard(confirm, "live confirmation/retry")
                 if any(getattr(module, name, None) is not function for name, function in original_bindings.items()):
                     raise RuntimeError("An editable function was rebound during activation checks")
                 if target.read_bytes() != replacement.encode("utf-8"):
                     raise RuntimeError("Source changed during activation or health checks")
+                self._check("commit")
                 self.core.commit(receipt.target_file, receipt.proposal_id)
+                budget.committed()
             except BaseException as retry_exc:
-                reason = f"Activation, retry or commit failed ({type(retry_exc).__name__})."
-                self._emit("rollback_started", reason, proposal_id=proposal_id, on_event=on_event)
-                try:
-                    self.core.rollback(receipt.target_file, receipt.snapshot_file, receipt.proposal_id, reason)
-                    for function, code in original_codes:
-                        function.__code__ = code
-                    for name, function in original_bindings.items():
-                        setattr(module, name, function)
-                except BaseException:
-                    self._disabled = True
-                    reason += " Source or function-code restoration failed; healing disabled. Restart the application."
-                else:
-                    reason += " Original source restored. External side effects are not undone."
-                self._emit("rollback_finished", reason, proposal_id=proposal_id, on_event=on_event)
+                reason = str(retry_exc) if isinstance(retry_exc, RepairTimeout) else \
+                    f"Activation, retry or commit failed ({type(retry_exc).__name__})."
+                with budget.cleanup():
+                    # Restore first. Terminal callbacks must never delay recovery.
+                    restoration_failed = False
+                    try:
+                        self.core.rollback(receipt.target_file, receipt.snapshot_file, receipt.proposal_id, reason)
+                    except BaseException:
+                        restoration_failed = True
+                    try:
+                        for function, code in original_codes:
+                            function.__code__ = code
+                        for name, function in original_bindings.items():
+                            setattr(module, name, function)
+                    except BaseException:
+                        restoration_failed = True
+                    if restoration_failed:
+                        self._disabled = True
+                        reason += " Source or function-code restoration failed; healing disabled. Restart the application."
+                    else:
+                        budget.committed()
+                        reason += " Original source restored. External side effects are not undone."
+                    if not isinstance(retry_exc, RepairTimeout):
+                        self._emit("rollback_finished", reason, proposal_id=proposal_id, on_event=on_event)
                 if not isinstance(retry_exc, Exception):
                     raise
-                return stopped(reason, "disabled" if self._disabled else "rolled_back", receipt.snapshot_file)
+                return stopped(reason, "disabled" if self._disabled else
+                               ("timed_out" if isinstance(retry_exc, RepairTimeout) else "rolled_back"), receipt.snapshot_file)
         message = "Repair verified, activated and retry confirmed." if request.operation == "repair" else "Live patch committed after all developer health checks passed."
-        self._emit("committed", message, proposal_id=proposal_id, on_event=on_event)
+        try:
+            self._emit("committed", message, proposal_id=proposal_id, on_event=on_event)
+        except RepairTimeout:
+            pass
         return RepairResult(True, proposal_id, message, value, review, "applied", receipt.snapshot_file)

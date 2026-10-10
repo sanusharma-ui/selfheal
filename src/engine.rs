@@ -8,6 +8,7 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::fs;
 use uuid::Uuid;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -64,6 +65,13 @@ impl CoreEngine {
         replacement_source: &str,
         proposal_id: Option<&str>,
     ) -> CoreResult<(String, VerificationReport)> {
+        self.verify_with_timeout(target_file, replacement_source, proposal_id, Duration::from_secs(120))
+    }
+
+    pub fn verify_with_timeout(&self, target_file: &Path, replacement_source: &str,
+                               proposal_id: Option<&str>, timeout: Duration) -> CoreResult<(String, VerificationReport)> {
+        let deadline = Instant::now().checked_add(timeout)
+            .ok_or_else(|| CoreError::Process("Invalid verification deadline".into()))?;
         let target = self.policy.ensure_target_allowed(target_file)?;
         let proposal_id = proposal_id
             .map(ToOwned::to_owned)
@@ -78,7 +86,9 @@ impl CoreEngine {
             }),
         )?;
 
-        let report = self.verifier.verify(&target, replacement_source)?;
+        check_deadline(deadline)?;
+        let report = self.verifier.verify_with_timeout(&target, replacement_source,
+                                                       deadline.saturating_duration_since(Instant::now()))?;
 
         self.audit.write(
             "verification_finished",
@@ -92,6 +102,7 @@ impl CoreEngine {
             }),
         )?;
 
+        check_deadline(deadline)?;
         Ok((proposal_id, report))
     }
 
@@ -102,13 +113,23 @@ impl CoreEngine {
         proposal_id: Option<&str>,
         expected_source: Option<&str>,
     ) -> CoreResult<RepairReceipt> {
+        self.verify_and_apply_with_timeout(target_file, replacement_source, proposal_id, expected_source,
+                                           Duration::from_secs(120))
+    }
+
+    pub fn verify_and_apply_with_timeout(&self, target_file: &Path, replacement_source: &str,
+                                         proposal_id: Option<&str>, expected_source: Option<&str>,
+                                         timeout: Duration) -> CoreResult<RepairReceipt> {
+        let deadline = Instant::now().checked_add(timeout)
+            .ok_or_else(|| CoreError::Process("Invalid repair deadline".into()))?;
         let target = self.policy.ensure_target_allowed(target_file)?;
         let before = fs::read(&target)?;
         if expected_source.is_some_and(|source| source.as_bytes() != before) {
             return Err(CoreError::Policy("Source changed since review".to_string()));
         }
         let (proposal_id, verification) =
-            self.verify(&target, replacement_source, proposal_id)?;
+            self.verify_with_timeout(&target, replacement_source, proposal_id,
+                                     deadline.saturating_duration_since(Instant::now()))?;
 
         if !verification.ok {
             return Err(CoreError::Verification(
@@ -119,6 +140,7 @@ impl CoreEngine {
         if fs::read(&target)? != before {
             return Err(CoreError::Policy("Source changed during verification".to_string()));
         }
+        check_deadline(deadline)?;
         let snapshot = self.snapshots.create(&target, &proposal_id)?;
 
         self.audit.write(
@@ -130,6 +152,8 @@ impl CoreEngine {
             }),
         )?;
 
+        // Never begin a source replacement once the shared budget has expired.
+        check_deadline(deadline)?;
         if let Err(err) = replace_text(&target, replacement_source) {
             let restore_result = self.snapshots.restore(&target, &snapshot);
 
@@ -154,6 +178,10 @@ impl CoreEngine {
                 "snapshot_file": snapshot,
             }),
         ) {
+            self.snapshots.restore(&target, &snapshot)?;
+            return Err(err);
+        }
+        if let Err(err) = check_deadline(deadline) {
             self.snapshots.restore(&target, &snapshot)?;
             return Err(err);
         }
@@ -242,6 +270,13 @@ impl CoreEngine {
         self.audit.write(event, json!({"proposal_id": proposal_id,
             "target_file": target, "details": details}))
     }
+}
+
+fn check_deadline(deadline: Instant) -> CoreResult<()> {
+    if Instant::now() >= deadline {
+        return Err(CoreError::Process("Repair deadline exceeded before activation".into()));
+    }
+    Ok(())
 }
 
 fn validate_proposal_id(id: &str) -> CoreResult<()> {

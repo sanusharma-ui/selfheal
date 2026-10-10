@@ -92,19 +92,22 @@ impl CoreEngine {
         Ok(Self { inner })
     }
 
-    #[pyo3(signature = (target_file, replacement_source, proposal_id=None))]
+    #[pyo3(signature = (target_file, replacement_source, proposal_id=None, timeout_seconds=None))]
     fn verify(
         &self,
         py: Python<'_>,
         target_file: String,
         replacement_source: String,
         proposal_id: Option<String>,
+        timeout_seconds: Option<f64>,
     ) -> PyResult<VerificationReport> {
+        let timeout = verification_timeout(timeout_seconds)?;
         let (id, report) = py.detach(|| {
-            self.inner.verify(
+            self.inner.verify_with_timeout(
                 &PathBuf::from(target_file),
                 &replacement_source,
                 proposal_id.as_deref(),
+                timeout,
             )
         }).map_err(py_err)?;
 
@@ -117,7 +120,7 @@ impl CoreEngine {
         })
     }
 
-    #[pyo3(signature = (target_file, replacement_source, proposal_id=None, expected_source=None))]
+    #[pyo3(signature = (target_file, replacement_source, proposal_id=None, expected_source=None, timeout_seconds=None))]
     fn verify_and_apply(
         &self,
         py: Python<'_>,
@@ -125,13 +128,16 @@ impl CoreEngine {
         replacement_source: String,
         proposal_id: Option<String>,
         expected_source: Option<String>,
+        timeout_seconds: Option<f64>,
     ) -> PyResult<RepairReceipt> {
+        let timeout = verification_timeout(timeout_seconds)?;
         let receipt = py.detach(|| {
-            self.inner.verify_and_apply(
+            self.inner.verify_and_apply_with_timeout(
                 &PathBuf::from(target_file),
                 &replacement_source,
                 proposal_id.as_deref(),
                 expected_source.as_deref(),
+                timeout,
             )
         }).map_err(py_err)?;
 
@@ -203,4 +209,12 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<VerificationReport>()?;
     module.add_class::<RepairReceipt>()?;
     Ok(())
+}
+
+fn verification_timeout(value: Option<f64>) -> PyResult<std::time::Duration> {
+    let seconds = value.unwrap_or(120.0);
+    if !seconds.is_finite() || seconds <= 0.0 || seconds > 3600.0 {
+        return Err(PyValueError::new_err("timeout_seconds must be finite, positive and at most 3600"));
+    }
+    Ok(std::time::Duration::from_secs_f64(seconds))
 }

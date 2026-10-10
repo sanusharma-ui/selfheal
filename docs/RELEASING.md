@@ -45,6 +45,9 @@ cargo test
 The regression suite uses deterministic or mocked providers and must not require
 a developer's real API credentials. API-backed manual testing is a separate step
 using the maintainer's own key and enabled model; see `MANUAL_TESTING.md`.
+The timing interface and worker helpers require a fresh native rebuild and the
+`cloudpickle` dependency. Run the isolated manual timing calculator and validate
+Windows Job cleanup/fail-stop behavior yourself using [TIMING.md](TIMING.md).
 
 ## Validate the installed wheel outside this checkout
 

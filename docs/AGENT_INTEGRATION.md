@@ -167,9 +167,11 @@ Normal routed calls continue during AI generation and initial verification.
 They wait during final verification, activation and health checks. This is a
 single-process development runtime, not zero-downtime multi-worker deployment.
 Verification compiles syntax and optionally runs the project's existing pytest
-suite, with a 120 second deadline per subprocess and bounded diagnostics.
-Candidate health checks use a separate module/function view sharing app objects;
-they run only after activation authorization and must be pure. Module initialization
+suite, consuming the remaining shared repair budget with bounded diagnostics.
+Candidate health checks run in a disposable process with a serializable snapshot
+of app state; they run only after activation authorization and must be pure.
+Baseline and post-activation checks remain live, guarded by the repair deadline.
+Module initialization
 does not re-run: globals, function identity, defaults and unmodified decorators
 remain intact. It does not generate trusted tests from the model. Function policies
 freeze signatures, decorators and other module definitions; editable functions
@@ -183,13 +185,15 @@ change dependencies. Calls must go through
 and activation coordination. Multiple processes/other runtimes are unsupported.
 
 Rollback restores source, not external writes or arbitrary in-memory state.
-Checks and activated functions run with app permissions and currently have no
-in-process execution deadline. Native verification kills its direct child on
-timeout; arbitrary child process trees are not contained by an OS sandbox.
+Checks and activated functions run with app permissions. One monotonic deadline
+covers each repair; worker trees are stopped on timeout. Python live callbacks
+are interrupted cooperatively; uninterruptible native callbacks trigger the
+independent hard watchdog, stopping the owning process for supervised restart.
+See [timing configuration and manual scenarios](TIMING.md). This is not an OS sandbox.
 Graceful shutdown waits for accepted transactions; a forced process kill does
 not provide automatic crash recovery. If restoration fails, healing is disabled
 and the app must restart. Use complete health contracts and trusted development
 environments; a successful bounded health report cannot prove every bug is fixed.
 
 Future production work includes language adapters/npm, durable crash recovery,
-bounded isolated execution, worker coordination and supervised canary activation.
+permission sandboxing, worker coordination and supervised canary activation.

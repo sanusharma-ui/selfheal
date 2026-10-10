@@ -230,6 +230,8 @@ class LiveControlServer:
         return {"pid": os.getpid(), "busy": self._operation.locked(),
                 "healing_disabled": self.runtime.healing_disabled,
                 "targets": list(self.targets), "last_result": self._last,
+                "repair_timeout_seconds": getattr(getattr(self.runtime, "config", None), "repair_timeout_seconds", None),
+                "hard_timeout": getattr(getattr(self.runtime, "config", None), "hard_timeout", None),
                 "agent": self.agent.status() if self.agent is not None else None}
 
     def start(self):

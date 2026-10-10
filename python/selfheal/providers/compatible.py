@@ -11,6 +11,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from selfheal.models import RepairProposal, RepairRequest
 from selfheal.errors import ConfigurationError
 from selfheal.privacy import redact
+from selfheal.timing import RepairTimeout, checkpoint, current_deadline
 from .base import AIProvider
 from .errors import ContextRejected, InvalidProposal, ProviderUnavailable
 
@@ -116,23 +117,47 @@ class OpenAICompatibleProvider(AIProvider):
         return payload, relative
 
     def _post(self, payload: bytes) -> bytes:
+        checkpoint("provider HTTP request")
         request = Request(self.base_url + "/chat/completions", data=payload, headers={
             "Authorization": "Bearer " + self._api_key,
             "Content-Type": "application/json", "User-Agent": "SelfHeal/0.3",
         })
         limit = self.max_replacement_bytes * 8 + 32_000
-        with build_opener(_NoRedirect()).open(request, timeout=self.timeout) as response:
-            body = response.read(limit + 1)
+        budget = current_deadline()
+        timeout = self.timeout if budget is None else min(self.timeout, budget.remaining())
+        with build_opener(_NoRedirect()).open(request, timeout=timeout) as response:
+            chunks, size = [], 0
+            reader = getattr(response, "read1", response.read)
+            while size <= limit:
+                checkpoint("provider response body")
+                if budget is not None:
+                    # urllib HTTPResponse exposes its socket through fp/raw.
+                    # Refresh it for every read so a trickling response cannot
+                    # repeatedly receive a fresh full request timeout.
+                    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+                    if sock is not None:
+                        sock.settimeout(min(self.timeout, budget.remaining()))
+                chunk = reader(min(16_384, limit + 1 - size))
+                checkpoint("provider response body")
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            body = b"".join(chunks)
         if len(body) > limit:
             raise InvalidProposal("Provider response exceeds the response size limit")
         return body
 
     def propose_repair(self, request: RepairRequest) -> RepairProposal | None:
+        checkpoint("provider context")
         payload, relative = self._payload(request)
         for attempt in range(self.max_retries + 1):
+            checkpoint("provider retry")
             try:
                 raw = self._post(payload)
                 break
+            except RepairTimeout:
+                raise
             except HTTPError as exc:
                 code = exc.code
                 exc.close()
@@ -141,7 +166,10 @@ class OpenAICompatibleProvider(AIProvider):
             except (URLError, TimeoutError, OSError):
                 if attempt == self.max_retries:
                     raise ProviderUnavailable("Provider connection or timeout failure") from None
-            time.sleep(min(0.25 * 2 ** attempt, 1.0))
+            delay = min(0.25 * 2 ** attempt, 1.0)
+            budget = current_deadline()
+            time.sleep(delay if budget is None else min(delay, budget.remaining()))
+            checkpoint("provider retry backoff")
         try:
             envelope = _json(raw)
             choices = envelope["choices"]

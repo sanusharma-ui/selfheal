@@ -12,6 +12,7 @@ import tomllib
 from .config import AgentConfig, SelfHealConfig
 from .live import LiveTarget
 from .privacy import redact
+from .timing import RepairDeadline, RepairTimeout
 from .runtime import SelfHealRuntime
 from .terminal import TerminalReporter
 
@@ -72,7 +73,10 @@ class SelfHealAgent:
         return cls(runtime, tuple(targets), config=AgentConfig.from_toml(path))
 
     def _emit(self, phase, message):
-        self.runtime._emit(phase, message)
+        try:
+            self.runtime._emit(phase, message)
+        except RepairTimeout:
+            pass  # Reporting cannot count one expired transaction as two failures.
 
     def start(self):
         with self._lock:
@@ -192,6 +196,18 @@ class SelfHealAgent:
 
     def _scan(self, name, *, force=False):
         with self._lock:
+            if self._paused or name in self._suspended or self._backoff.get(name, 0) > time.monotonic():
+                return
+        # The initial local scan and any ensuing repair share ONE budget. Nested
+        # runtime health/inspection calls reuse it instead of renewing it.
+        try:
+            with RepairDeadline(self.runtime.config):
+                self._scan_with_deadline(name, force=force)
+        except RepairTimeout as exc:
+            self._failed(name, str(exc), status="timed_out")
+
+    def _scan_with_deadline(self, name, *, force=False):
+        with self._lock:
             now = time.monotonic()
             if self._paused or name in self._suspended or self._backoff.get(name, 0) > now:
                 return
@@ -248,16 +264,16 @@ class SelfHealAgent:
                     self._failures[name] = 0
                     self._backoff.pop(name, None)
             else:
-                self._failed(name, result.message)
+                self._failed(name, result.message, status=result.status if result.status == "timed_out" else "failed")
         finally:
             with self._lock:
                 self._active = None
 
-    def _failed(self, name, message):
+    def _failed(self, name, message, *, status="failed"):
         with self._lock:
             self._failures[name] += 1
             count = self._failures[name]
-            self._last[name] = {"status": "failed", "message": redact(message)}
+            self._last[name] = {"status": status, "message": redact(message)}
             self._backoff[name] = time.monotonic() + min(
                 self.config.failure_backoff_seconds * 2 ** min(count - 1, 10), 3600)
             if count >= self.config.max_consecutive_failures:

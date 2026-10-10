@@ -5,8 +5,9 @@ from .models import HealthCheckResult, HealthReport, RepairEvent, RepairReview, 
 from .live import LiveControlServer, LiveTarget
 from .terminal import TerminalReporter
 from .agent import SelfHealAgent
+from .timing import RepairTimeout
 
 __all__ = ["SelfHealConfig", "SelfHealRuntime", "RepairReview", "RepairResult",
            "HealthCheckResult", "HealthReport", "RepairEvent", "LiveControlServer",
-           "LiveTarget", "TerminalReporter", "SelfHealAgent", "AgentConfig", "ConfigurationError"]
+           "LiveTarget", "TerminalReporter", "SelfHealAgent", "AgentConfig", "ConfigurationError", "RepairTimeout"]
 __version__ = "0.3.0"

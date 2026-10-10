@@ -20,8 +20,11 @@ SelfHeal Runtime performs source-code verification and controlled source replace
   review what source and exception context your application may transmit.
 - Review mode verifies code before presenting approval. Verification tests execute
   in a copied workspace with host permissions, not an OS sandbox. They can access
-  the network, environment and host files. Native verification has a 120 second
-  deadline per subprocess; it kills the direct child, not an arbitrary process tree.
+  the network, environment and host files. Native verification consumes the
+  remaining shared repair budget. Its workers own POSIX process groups or Windows
+  kill-on-close Jobs before launching checks; this is process-tree cleanup, not
+  an OS permission sandbox. Direct native-core calls default to a 120s total
+  verification budget unless `timeout_seconds` is supplied.
 - Only safe-to-repeat calls should use `retry_safe=True`. Rollback restores source,
   not external side effects, stale references, class instances or arbitrary memory.
 - Single-runtime serialization is not process/worker coordination. Concurrent source
@@ -33,9 +36,20 @@ SelfHeal Runtime performs source-code verification and controlled source replace
 
 - Register only developer-owned code and pure, bounded health checks. Keep checks
   outside editable function bodies. Target allowlists are not execution sandboxes.
-- Candidate checks run after authorization in a separate module/function view
-  that shares app objects; purity is a developer obligation. In-process health
-  checks and patched functions have no execution deadline.
+- Candidate checks run after authorization in a disposable process with a
+  cloudpickle snapshot of trusted local app state. Unserializable state fails
+  closed. Never accept serialized health payloads from external clients. Worker
+  files live temporarily under ignored `.selfheal/` and are removed on normal
+  completion or soft timeout; a forced kill may leave files for manual cleanup.
+- Live baseline/activation checks and retries preserve the app's actual objects.
+  Python bytecode has a cooperative deadline; an independent watchdog terminates
+  the owning app if native code cannot unwind by the configured hard deadline.
+  This is fail-stop, not transparent recovery. An external supervisor must restart
+  the app. Disabling `SELFHEAL_HARD_TIMEOUT` removes that native-stall bound.
+- Timeout watchdog recovery only restores source matching the exact uncommitted
+  candidate and a hash-checked retained snapshot, after confirming owner exit.
+  It preserves developer edits. It cannot undo external writes or memory changes,
+  and it is not general forced-kill crash recovery. See `docs/TIMING.md`.
 - Scoped activation preserves module state by updating function code rather than
   re-running initialization. Synchronous module-level functions are supported;
   wrapper closures, async/generator functions and native callables are rejected.

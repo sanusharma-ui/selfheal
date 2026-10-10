@@ -29,6 +29,7 @@ class CoreEngine:
         target_file: str,
         replacement_source: str,
         proposal_id: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> VerificationReport: ...
 
     def verify_and_apply(
@@ -37,6 +38,7 @@ class CoreEngine:
         replacement_source: str,
         proposal_id: str | None = None,
         expected_source: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> RepairReceipt: ...
 
     def rollback(

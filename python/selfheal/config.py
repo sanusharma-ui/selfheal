@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import math
+import os
 import sys
 import tomllib
+
+from dotenv import load_dotenv
 
 from .errors import ConfigurationError
 
@@ -18,6 +22,9 @@ class SelfHealConfig:
     snapshot_dir: str = ".selfheal/snapshots"
     audit_file: str = ".selfheal/audit.jsonl"
     max_replacement_bytes: int = 128_000
+    repair_timeout_seconds: float | None = None
+    timeout_cleanup_seconds: float | None = None
+    hard_timeout: bool | None = None
 
     def __post_init__(self) -> None:
         self.project_root = Path(self.project_root).resolve()
@@ -41,6 +48,28 @@ class SelfHealConfig:
                 raise ConfigurationError(f"{name} must stay inside project_root") from None
         if type(self.max_replacement_bytes) is not int or self.max_replacement_bytes <= 0:
             raise ConfigurationError("max_replacement_bytes must be a positive integer")
+        # Explicit constructor/TOML values win; process env wins over cwd/.env.
+        load_dotenv(Path.cwd() / ".env", override=False, interpolate=False, encoding="utf-8-sig")
+        for field, variable, default, minimum, maximum in (
+            ("repair_timeout_seconds", "SELFHEAL_REPAIR_TIMEOUT_SECONDS", 180.0, 1.0, 3600.0),
+            ("timeout_cleanup_seconds", "SELFHEAL_TIMEOUT_CLEANUP_SECONDS", 5.0, 0.1, 60.0),
+        ):
+            value = getattr(self, field)
+            if value is None:
+                try:
+                    value = float(os.environ.get(variable, str(default)))
+                except (ValueError, TypeError):
+                    raise ConfigurationError(f"{variable} must be a finite number between {minimum} and {maximum}") from None
+            if type(value) not in (int, float) or not math.isfinite(value) or not minimum <= value <= maximum:
+                raise ConfigurationError(f"{field} must be a finite number between {minimum} and {maximum}")
+            setattr(self, field, float(value))
+        if self.hard_timeout is None:
+            value = os.environ.get("SELFHEAL_HARD_TIMEOUT", "true").strip().lower()
+            if value not in ("true", "false"):
+                raise ConfigurationError("SELFHEAL_HARD_TIMEOUT must be true or false")
+            self.hard_timeout = value == "true"
+        elif type(self.hard_timeout) is not bool:
+            raise ConfigurationError("hard_timeout must be a boolean")
 
     def normalized_root(self) -> Path:
         return self.project_root.resolve()
