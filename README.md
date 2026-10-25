@@ -54,7 +54,8 @@ python -m pip install -e ".[dev]"
 Source installations require Rust and platform C/C++ build prerequisites.
 See [Windows setup and manual testing](https://github.com/sanusharma-ui/selfheal/blob/main/MANUAL_TESTING.md) for toolchain guidance.
 
-Once a release is published to PyPI, the package installation command is:
+
+Install from PyPI:
 
 ```shell
 python -m pip install "selfheal-runtime[verification]"
