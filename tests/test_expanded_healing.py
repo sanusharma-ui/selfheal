@@ -110,7 +110,7 @@ def test_class_rebinding_during_live_confirmation_is_rolled_back(application):
 def test_changed_read_only_helper_invalidates_candidate(application):
     module, path = application("def run():\n    return 1\n")
     helper = path.parent / "helper.py"
-    helper.write_text("LIMIT = 1\n", encoding="utf-8")
+    helper.write_text("LIMIT = 1\n", encoding="utf-8", newline="")
     provider = Candidate("def run():\n    return 2\n")
     propose = provider.propose_repair
 

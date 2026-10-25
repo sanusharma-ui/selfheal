@@ -69,7 +69,7 @@ class SelfHealConfig:
                 except (ValueError, TypeError):
                     raise ConfigurationError(f"{variable} must be a finite number between {minimum} and {maximum}") from None
             if type(value) not in (int, float) or not math.isfinite(value) or not minimum <= value <= maximum:
-                raise ConfigurationError(f"{field} must be a finite number between {minimum} and {maximum}")
+                raise ConfigurationError(f"{variable} must be a finite number between {minimum} and {maximum}")
             setattr(self, field, float(value))
         if self.hard_timeout is None:
             value = os.environ.get("SELFHEAL_HARD_TIMEOUT", "true").strip().lower()

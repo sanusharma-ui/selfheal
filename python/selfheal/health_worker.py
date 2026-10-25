@@ -58,12 +58,14 @@ def candidate_health(check, candidate, project_root, budget, *, updates=()):
                 registered.append(module)
             output = io.BytesIO()
             cloudpickle.dump(list(sys.path), output)
-            # Serialize the original object graph together with pending code
-            # updates. Class descriptors, instances, helpers and aliases retain
-            # their relationships; code changes happen only inside the worker.
+            # Serialize the health check separately from the candidate view so
+            # cloudpickle cannot merge the view's identity with any module
+            # reference captured in the check closure.  The worker deserializes
+            # them independently, ensuring ``candidate is module`` is False.
             view = ModuleType(candidate.__name__)
             view.__dict__.update(candidate.__dict__)
-            cloudpickle.dump((check, view, tuple(updates)), output)
+            cloudpickle.dump(check, output)
+            cloudpickle.dump((view, tuple(updates)), output)
             payload = output.getvalue()
             if len(payload) > 4_000_000:
                 raise ValueError("Candidate health snapshot exceeds 4 MB")
@@ -115,7 +117,9 @@ def candidate_health(check, candidate, project_root, budget, *, updates=()):
         finally:
             with budget.cleanup():
                 try:
-                    stop_process_tree(process)
-                finally:
-                    process.stdin.close()
+                    if process.stdin and not process.stdin.closed:
+                        process.stdin.close()
+                except Exception:
+                    pass
+                stop_process_tree(process)
                 budget.track_worker(None)

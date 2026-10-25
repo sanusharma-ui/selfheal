@@ -38,10 +38,16 @@ def main():
     with request.open("rb") as source:
         paths = cloudpickle.load(source)
         sys.path[:0] = paths
-        check, module, updates = cloudpickle.load(source)
+        check = cloudpickle.load(source)
+        module, updates = cloudpickle.load(source)
     try:
         for function, code in updates:
+            if hasattr(function, "__globals__") and isinstance(function.__globals__, dict):
+                function.__globals__.update(module.__dict__)
             function.__code__ = code
+        for val in module.__dict__.values():
+            if hasattr(val, "__globals__") and isinstance(val.__globals__, dict):
+                val.__globals__.update(module.__dict__)
         report = _health_report(check, module)
         data = {"checks": [{"name": item.name, "ok": item.ok is True, "details": item.details}
                            for item in report.checks]}
