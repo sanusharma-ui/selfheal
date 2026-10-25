@@ -1,10 +1,10 @@
 # Async calls and live repair
 
-SelfHeal supports module-level `async def` functions on one owning `asyncio`
+SelfHeal supports module-level and directly defined method `async def` functions on one owning `asyncio`
 event loop per runtime. Calls and repaired retries await on that loop, preserving
 access to its futures, queues and application clients. Provider generation,
 native verification and source transactions run in repair workers. Async
-generators, regular generators, class methods and wrapper closures remain
+generators, regular generators and arbitrary wrapper closures remain
 unsupported.
 
 These changes have regression tests supplied for maintainer execution. They have
@@ -111,7 +111,7 @@ runtime within its application's loop lifetime.
 Awaited exceptions become failure context. Wrong results require developer
 health contracts: check boundary inputs, invariants, expected output and
 regressions, rather than only whether the function returns. Register related
-module-level helpers in `editable_symbols` when a repair legitimately spans
+functions or dotted methods in `editable_symbols` when a repair legitimately spans
 several bodies in one module. Imports, signatures, decorators and unrelated
 definitions remain protected.
 

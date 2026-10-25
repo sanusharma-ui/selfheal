@@ -33,6 +33,7 @@ class RepairRequest:
     instructions: str = ""
     health_report: str = ""
     editable_symbols: tuple[str, ...] = ()
+    related_sources: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

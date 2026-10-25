@@ -6,8 +6,10 @@ from .live import LiveControlServer, LiveTarget
 from .terminal import TerminalReporter
 from .agent import SelfHealAgent
 from .timing import RepairTimeout
+from .checks import HealthSuite, PropertyCheck, ScenarioCheck
 
 __all__ = ["SelfHealConfig", "SelfHealRuntime", "RepairReview", "RepairResult",
            "HealthCheckResult", "HealthReport", "RepairEvent", "LiveControlServer",
-           "LiveTarget", "TerminalReporter", "SelfHealAgent", "AgentConfig", "ConfigurationError", "RepairTimeout"]
+           "LiveTarget", "TerminalReporter", "SelfHealAgent", "AgentConfig", "ConfigurationError", "RepairTimeout",
+           "HealthSuite", "PropertyCheck", "ScenarioCheck"]
 __version__ = "0.3.0"

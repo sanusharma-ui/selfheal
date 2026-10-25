@@ -1,3 +1,7 @@
+NATIVE_API_VERSION: int
+PACKAGE_VERSION: str
+
+
 class VerificationReport:
     ok: bool
     syntax_ok: bool

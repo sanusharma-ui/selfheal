@@ -200,7 +200,7 @@ remain privileged code and may still have side effects.
 
 The agent updates one registered Python module per transaction. It does not
 attach to arbitrary unintegrated processes, repair native/generator/async-generator functions,
-repair wrapper closures or class methods, replace existing class instances or
+repair arbitrary wrapper closures, replace existing class instances or
 change dependencies. Calls must go through
 `agent.bind()`, `agent.call()`, `runtime.invoke()` or `runtime.call()` (or their
 async counterparts) for dispatch and activation coordination. Multiple

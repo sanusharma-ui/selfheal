@@ -205,6 +205,8 @@ impl CoreEngine {
 
 #[pymodule]
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add("NATIVE_API_VERSION", 1)?;
+    module.add("PACKAGE_VERSION", env!("CARGO_PKG_VERSION"))?;
     module.add_class::<CoreEngine>()?;
     module.add_class::<VerificationReport>()?;
     module.add_class::<RepairReceipt>()?;

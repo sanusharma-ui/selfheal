@@ -43,11 +43,12 @@ jobs:
       - name: Check archive contents
         run: python scripts/check_dist.py
       - name: Install the built wheel with verification dependencies
-        run: python -c "import pathlib, subprocess, sys; wheel = next(pathlib.Path('dist').glob('*.whl')); subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(wheel) + '[verification]'])"
+        run: python -c "import pathlib, subprocess, sys; wheel = next(pathlib.Path('dist').glob('*.whl')); subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(wheel) + '[verification,exploration]'])"
       - name: Verify installed SDK origin and command entry point
         run: |
           python -c "import pathlib, selfheal, selfheal._core; root = pathlib.Path(selfheal.__file__).resolve(); assert 'site-packages' in root.parts, root; print(root)"
           selfheal --help
+          selfheal doctor
       - name: Run regressions against the installed wheel
         run: python -m pytest tests -o pythonpath= --import-mode=importlib
       - name: Check package metadata
@@ -75,6 +76,18 @@ jobs:
           command: sdist
           args: --out dist
       - run: python scripts/check_dist.py
+      - name: Build a wheel from the source archive
+        run: python -m pip wheel --no-deps --wheel-dir source-wheel dist/*.tar.gz
+      - name: Validate the source-built wheel
+        run: |
+          python scripts/check_dist.py source-wheel/*.whl
+          python -c "import pathlib, subprocess, sys; wheel = next(pathlib.Path('source-wheel').glob('*.whl')); subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(wheel) + '[verification,exploration]'])"
+          python -m selfheal doctor
+          python -m pytest tests -o pythonpath= --import-mode=importlib
+      - name: Check source archive metadata
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
       - uses: actions/upload-artifact@v4
         with:
           name: source

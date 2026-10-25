@@ -4,12 +4,16 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     runs-on: ${{ matrix.os }}
 
@@ -29,7 +33,10 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: Python tests
-        run: pytest
+        run: python -m pytest
+
+      - name: SDK/native compatibility
+        run: python -m selfheal doctor
 
       - name: Rust tests
-        run: cargo test
+        run: cargo test --locked

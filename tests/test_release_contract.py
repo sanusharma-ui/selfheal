@@ -14,6 +14,13 @@ from selfheal.providers import GroqProvider, provider_from_env
 from selfheal.providers import compatible
 
 
+def test_stale_native_interface_fails_before_provider_selection(tmp_path, monkeypatch):
+    from selfheal import _core
+    monkeypatch.setattr(_core, "NATIVE_API_VERSION", 0)
+    with pytest.raises(ConfigurationError, match="native extension is stale"):
+        SelfHealRuntime(SelfHealConfig(tmp_path, run_tests=False))
+
+
 def test_sdk_initialization_without_keys_fails_before_any_api_request(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(os, "environ", {})

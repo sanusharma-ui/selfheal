@@ -71,6 +71,7 @@ class SelfHealAgent:
                 raise ValueError("health_check must be a module:function reference")
             callback = getattr(importlib.import_module(module_name), symbol)
             fields["editable_symbols"] = tuple(fields.get("editable_symbols", ()))
+            fields["context_files"] = tuple(fields.get("context_files", ()))
             targets.append(LiveTarget(health_check=callback, **fields))
         return cls(runtime, tuple(targets), config=AgentConfig.from_toml(path))
 
@@ -318,6 +319,7 @@ class SelfHealAgent:
                 operation="improve" if improve_now else "heal",
                 instructions=target.instructions + ("\n\n" + improvement if improve_now else ""),
                 editable_symbols=target.editable_symbols, apply=self.config.auto_apply,
+                context_files=target.context_files,
                 observed_failure=observed_failure,
             )
             if result.status == "busy":

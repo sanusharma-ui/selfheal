@@ -14,6 +14,21 @@ import time
 _job = None
 
 
+def python_worker_command(*arguments):
+    """Keep Popen.pid equal to the worker PID, including Windows virtualenvs.
+
+    CPython's Windows venv executable is a redirector process. Starting the
+    underlying interpreter with its launcher marker preserves the venv while
+    making parent verification and kill-on-close cleanup target the real worker.
+    """
+    environment = os.environ.copy()
+    executable = sys.executable
+    if os.name == "nt":
+        executable = getattr(sys, "_base_executable", None) or sys.executable
+        environment["__PYVENV_LAUNCHER__"] = sys.executable
+    return [executable, *arguments], environment
+
+
 def contain_current_process():
     global _job
     parent = os.getppid()

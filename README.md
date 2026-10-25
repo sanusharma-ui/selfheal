@@ -17,11 +17,11 @@ uninterruptible timeout can stop it for recovery.
 
 [Get started](#install-and-configure-your-own-api) ·
 [Embed the agent](#embed-it-in-your-running-app) ·
-[Async support](docs/ASYNC.md) ·
+[Async support](https://github.com/sanusharma-ui/selfheal/blob/main/docs/ASYNC.md) ·
 [Terminal controls](#inspect-and-patch-from-the-terminal) ·
 [Time budgets](#configure-the-repair-time-budget) ·
 [Try the calculator](#try-the-isolated-calculator) ·
-[Security](SECURITY.md)
+[Security](https://github.com/sanusharma-ui/selfheal/blob/main/SECURITY.md)
 
 ## What you get
 
@@ -38,9 +38,10 @@ uninterruptible timeout can stop it for recovery.
 This is a **single-process Python SDK**. Integrate it into your app, register
 editable functions, and route participating calls through its dispatch lock.
 It cannot attach to an arbitrary process or prove every AI patch correct.
-Synchronous and module-level `async def` targets are supported. Async apps use
+Synchronous and `async def` functions, directly defined methods and property
+accessors are supported in the source implementation. Async apps use
 `async with agent` and `await agent.bind("target")(...)`; see the
-[async integration guide](docs/ASYNC.md) for loop ownership and cancellation.
+[async integration guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/ASYNC.md) for loop ownership and cancellation.
 
 ## Install and configure your own API
 
@@ -51,7 +52,7 @@ python -m pip install -e ".[dev]"
 ```
 
 Source installations require Rust and platform C/C++ build prerequisites.
-See [Windows setup and manual testing](MANUAL_TESTING.md) for toolchain guidance.
+See [Windows setup and manual testing](https://github.com/sanusharma-ui/selfheal/blob/main/MANUAL_TESTING.md) for toolchain guidance.
 
 Once a release is published to PyPI, the package installation command is:
 
@@ -177,6 +178,17 @@ are retained. Active routed calls finish before activation; subsequent routed
 calls use the new code. Calls continue during API generation and initial native
 verification, and wait during final verification and activation.
 
+## Deeper checks and method targets
+
+For generated edge cases, workflow invariants, dotted method targets and optional
+read-only helper context, see [deeper checks and method targets](https://github.com/sanusharma-ui/selfheal/blob/main/docs/DEEP_HEALING.md).
+The optional `selfheal-runtime[exploration]` extra supplies Hypothesis for bounded
+property checks. Expected behavior remains developer-owned; generated tests do
+not establish that every bug has been found.
+
+Run `python -m selfheal doctor` to inspect SDK/native compatibility without an API
+request. A stale editable native extension is rejected before repair starts.
+
 ## Provider selection
 
 ```python
@@ -218,13 +230,15 @@ Explicit SDK/TOML settings override process environment variables, which overrid
 The enabled hard-timeout watchdog can **terminate the owning application** if
 native code cannot unwind. A supervisor or maintainer must restart it after
 recovery finishes. Disabling it removes that bound on native stalls.
-See [timing behavior and recovery](docs/TIMING.md) for details.
+See [timing behavior and recovery](https://github.com/sanusharma-ui/selfheal/blob/main/docs/TIMING.md) for details.
 
 ## Operational boundaries
 
-- Supported targets are synchronous and coroutine module-level Python functions
-  in writable UTF-8 source under the configured project root. Regular/async generators, native
-  callables, wrapper closures, class methods and dependency changes are rejected.
+- Targets can be synchronous/coroutine module functions, directly defined instance,
+  static/class methods and property accessors in writable UTF-8 project source.
+  Class layout, descriptors and signatures stay fixed. Regular/async generators,
+  native callables, arbitrary wrapper closures, custom metaclasses, inherited
+  target definitions and dependency changes are rejected.
 - Register one runtime/agent per owning process. Multi-worker coordination,
   automatic crash recovery after a forced kill and remote-process attachment
   are not implemented. All participating calls need the runtime's dispatch
@@ -245,7 +259,7 @@ See [timing behavior and recovery](docs/TIMING.md) for details.
   the agent separately bounds background AI attempts with budgets, backoff and suspension.
 
 Use only code, accounts and data you are authorized to modify or transmit.
-Review [SECURITY.md](SECURITY.md) and the AI provider's applicable terms before
+Review [SECURITY.md](https://github.com/sanusharma-ui/selfheal/blob/main/SECURITY.md) and the AI provider's applicable terms before
 enabling automatic patches. Passing checks is evidence about the registered
 contracts, not a guarantee of correctness or legal compliance.
 
@@ -265,23 +279,23 @@ the SDK never imports the fixture.
 
 Expected final output: `MANUAL CALCULATOR: PASS`. This is a maintainer-run
 validation command; the current timing changes still require runtime and native
-build validation. See [the walkthrough and expected results](docs/TIMING.md#commands-for-you-to-run).
+build validation. See [the walkthrough and expected results](https://github.com/sanusharma-ui/selfheal/blob/main/docs/TIMING.md#commands-for-you-to-run).
 
 ## Development and release
 
 | Resource | Purpose |
 | --- | --- |
-| [Integration guide](docs/AGENT_INTEGRATION.md) | Register targets, define health contracts and embed the background agent. |
-| [Async guide](docs/ASYNC.md) | Coroutine dispatch, live health, cancellation, concurrency and manual regression commands. |
-| [TOML template](selfheal.example.toml) | Configure runtime, scheduling and editable targets. |
-| [Manual testing](MANUAL_TESTING.md) | Set up Windows tooling and walk through the live calculator. |
-| [Timing guide](docs/TIMING.md) | Configure deadlines and exercise the isolated timeout scenarios. |
-| [Release guide](docs/RELEASING.md) | Build and validate distribution artifacts before publication. |
-| [Changelog](CHANGELOG.md) | Review version history. |
+| [Integration guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/AGENT_INTEGRATION.md) | Register targets, define health contracts and embed the background agent. |
+| [Async guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/ASYNC.md) | Coroutine dispatch, live health, cancellation, concurrency and manual regression commands. |
+| [TOML template](https://github.com/sanusharma-ui/selfheal/blob/main/selfheal.example.toml) | Configure runtime, scheduling and editable targets. |
+| [Manual testing](https://github.com/sanusharma-ui/selfheal/blob/main/MANUAL_TESTING.md) | Set up Windows tooling and walk through the live calculator. |
+| [Timing guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/TIMING.md) | Configure deadlines and exercise the isolated timeout scenarios. |
+| [Release guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/RELEASING.md) | Build and validate distribution artifacts before publication. |
+| [Changelog](https://github.com/sanusharma-ui/selfheal/blob/main/CHANGELOG.md) | Review version history. |
 
 `examples/live_calculator.py` is a deliberately broken manual fixture. The release
 workflow is manually started by the maintainer and only produces artifacts.
 No PyPI upload is automatic.
 
-Original source is [MIT licensed](LICENSE). Bundled dependency terms and retained
-copyright notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Original source is [MIT licensed](https://github.com/sanusharma-ui/selfheal/blob/main/LICENSE). Bundled dependency terms and retained
+copyright notices are in [THIRD_PARTY_NOTICES.md](https://github.com/sanusharma-ui/selfheal/blob/main/THIRD_PARTY_NOTICES.md).

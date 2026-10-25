@@ -14,12 +14,14 @@ import subprocess
 import sys
 import tempfile
 from threading import RLock
+from types import ModuleType
 import time
 
 import cloudpickle
 
 from .models import HealthCheckResult, HealthReport
 from .timing import RepairTimeout, stop_process_tree
+from ._process_tree import python_worker_command
 
 _serialization_lock = RLock()
 
@@ -28,7 +30,7 @@ class CandidateIsolationError(ValueError):
     pass
 
 
-def candidate_health(check, candidate, project_root, budget):
+def candidate_health(check, candidate, project_root, budget, *, updates=()):
     def serialize():
         # cloudpickle's by-value registry is global; restore every registration
         # we own even when serialization or the deadline fails.
@@ -49,13 +51,19 @@ def candidate_health(check, candidate, project_root, budget):
                     path.resolve().relative_to(project_root)
                 except (ValueError, OSError, TypeError):
                     continue
-                if module.__name__.startswith("selfheal") or module.__name__ in existing:
+                if (module.__name__ == "selfheal" or module.__name__.startswith("selfheal.")
+                        or module.__name__ in existing):
                     continue
                 cloudpickle.register_pickle_by_value(module)
                 registered.append(module)
             output = io.BytesIO()
             cloudpickle.dump(list(sys.path), output)
-            cloudpickle.dump((check, candidate), output)
+            # Serialize the original object graph together with pending code
+            # updates. Class descriptors, instances, helpers and aliases retain
+            # their relationships; code changes happen only inside the worker.
+            view = ModuleType(candidate.__name__)
+            view.__dict__.update(candidate.__dict__)
+            cloudpickle.dump((check, view, tuple(updates)), output)
             payload = output.getvalue()
             if len(payload) > 4_000_000:
                 raise ValueError("Candidate health snapshot exceeds 4 MB")
@@ -80,8 +88,10 @@ def candidate_health(check, candidate, project_root, budget):
         with os.fdopen(descriptor, "wb") as output:
             output.write(payload)
         budget.check("candidate health worker startup")
+        command, environment = python_worker_command(
+            str(Path(__file__).with_name("_health_worker.py")), str(request), str(response))
         process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).with_name("_health_worker.py")), str(request), str(response)],
+            command, env=environment,
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=os.name != "nt",
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,

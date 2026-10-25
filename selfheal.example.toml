@@ -31,5 +31,8 @@ module_name = "myapp.pricing"
 symbol_name = "quote"
 health_check = "myapp.health:check_pricing"
 editable_symbols = ["quote"]
+# Dotted targets are also accepted, e.g. "Pricing.quote" or "Pricing.total.fget".
+# Optional read-only diagnostic context; these files are not editable:
+context_files = []
 retry_safe = true
 instructions = "Preserve the quote API and the application's pricing contracts."

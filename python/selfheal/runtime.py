@@ -16,6 +16,9 @@ import uuid
 from ._async_support import (AsyncOperation, AsyncUsageError, RepairCancelled, callback_runtime,
                              close_coroutine, operation, require_sync_api, run_worker)
 from ._coordination import InvocationGate
+from ._symbols import resolve_binding, valid_symbol
+from ._native import check_native_compatibility
+from .diagnostics import context_unchanged, related_sources
 from .config import SelfHealConfig
 from .languages import PythonRuntimeAdapter
 from .models import (FailureContext, HealthCheckResult, HealthReport, RepairEvent,
@@ -48,6 +51,7 @@ class SelfHealRuntime:
     def __init__(self, config: SelfHealConfig, *, provider: AIProvider | None = None,
                  reviewer: Callable[[RepairReview], bool] | None = None,
                  event_sink: Callable[[RepairEvent], None] | None = None):
+        check_native_compatibility()
         self.config = config
         self.project_root = config.normalized_root()
         self.provider = provider if provider is not None else provider_from_env()
@@ -272,6 +276,7 @@ class SelfHealRuntime:
                        retry_safe: bool = False, operation: str = "heal",
                        instructions: str = "", editable_symbols: tuple[str, ...] = (),
                        observed_failure: str = "", apply: bool = False,
+                       context_files: tuple[str, ...] = (),
                        on_event: Callable[[RepairEvent], None] | None = None) -> RepairResult:
         """Run inspection off the loop; await live health checks on this loop."""
         self._async_entry(repair=True)
@@ -280,7 +285,7 @@ class SelfHealRuntime:
                 module_name=module_name, symbol_name=symbol_name, health_check=health_check,
                 retry_safe=retry_safe, operation=operation, instructions=instructions,
                 editable_symbols=editable_symbols, observed_failure=observed_failure,
-                apply=apply, on_event=on_event))
+                apply=apply, context_files=context_files, on_event=on_event))
         except RepairTimeout as error:
             result = RepairResult(False, message=str(error), status="timed_out")
             self.last_result = result
@@ -333,6 +338,7 @@ class SelfHealRuntime:
                 instructions: str = "", editable_symbols: tuple[str, ...] = (),
                 observed_failure: str = "",
                 apply: bool = False,
+                context_files: tuple[str, ...] = (),
                 on_event: Callable[[RepairEvent], None] | None = None) -> RepairResult:
         """Inspect a registered target within one configured repair deadline.
 
@@ -345,7 +351,7 @@ class SelfHealRuntime:
                 return self._inspect(module_name=module_name, symbol_name=symbol_name,
                     health_check=health_check, retry_safe=retry_safe, operation=operation,
                     instructions=instructions, editable_symbols=editable_symbols,
-                    observed_failure=observed_failure, apply=apply, on_event=on_event)
+                    observed_failure=observed_failure, apply=apply, context_files=context_files, on_event=on_event)
         except (RepairTimeout, RepairCancelled) as exc:
             result = RepairResult(False, message=str(exc),
                                   status="cancelled" if isinstance(exc, RepairCancelled) else "timed_out")
@@ -353,7 +359,7 @@ class SelfHealRuntime:
             return result
 
     def _inspect(self, *, module_name, symbol_name, health_check, retry_safe,
-                 operation, instructions, editable_symbols, observed_failure, apply, on_event):
+                 operation, instructions, editable_symbols, observed_failure, apply, context_files, on_event):
         """Inspect running code on command, including silent logic bugs.
 
         apply=True is explicit command authorization. Health checks are trusted,
@@ -374,7 +380,7 @@ class SelfHealRuntime:
         if type(apply) is not bool:
             raise TypeError("apply must be a boolean")
         if not isinstance(editable_symbols, tuple) or any(
-            type(name) is not str or not name.isidentifier() for name in editable_symbols
+            not valid_symbol(name) for name in editable_symbols
         ) or len(set(editable_symbols)) != len(editable_symbols):
             raise ValueError("editable_symbols must contain unique function names")
         editable_symbols = editable_symbols or (symbol_name,)
@@ -411,7 +417,7 @@ class SelfHealRuntime:
                 request = RepairRequest(failure, original.decode("utf-8"), self.project_root,
                                         operation, instructions,
                                         baseline.describe() + ("\nObserved runtime failure: " + redact(observed_failure) if observed_failure else ""),
-                                        editable_symbols)
+                                        editable_symbols, related_sources(self.project_root, target, context_files))
 
             def confirm():
                 report = self._health(module_name, health_check)
@@ -551,6 +557,8 @@ class SelfHealRuntime:
             return RepairResult(False, proposal_id, "Candidate violated the editable function policy.", status="failed")
         if target.read_bytes() != original:
             return RepairResult(False, proposal_id, "Source changed while the provider was running.")
+        if not context_unchanged(self.project_root, request.related_sources):
+            return RepairResult(False, proposal_id, "Related source changed while the provider was running.")
         self._emit("verification_started", "Rust is verifying the candidate in a copied workspace.",
                    proposal_id=proposal_id, on_event=on_event)
         try:
@@ -591,17 +599,21 @@ class SelfHealRuntime:
             self._check("activation preparation")
             if target.read_bytes() != original:
                 return stopped("Source changed after review; candidate discarded.")
+            if not context_unchanged(self.project_root, request.related_sources):
+                return stopped("Related source changed after review; candidate discarded.")
             updates = self.language.prepare(module_name, replacement, request.editable_symbols)
             module = importlib.import_module(module_name)
-            original_bindings = {name: getattr(module, name) for name in request.editable_symbols}
+            original_bindings = [resolve_binding(module, name) for name in request.editable_symbols]
             if health_check is not None:
-                candidate = self.language.candidate_module(module_name, updates)
-                candidate_health_report = candidate_health(health_check, candidate, self.project_root, budget)
+                candidate_health_report = candidate_health(health_check, module, self.project_root, budget,
+                                                           updates=updates)
                 self._emit("candidate_health", candidate_health_report.describe(), proposal_id=proposal_id, on_event=on_event)
                 if not candidate_health_report.ok:
                     return stopped("Candidate failed developer health checks; live source and functions unchanged.")
                 if target.read_bytes() != original:
                     return stopped("Source changed during candidate health checks; candidate discarded.")
+                if not context_unchanged(self.project_root, request.related_sources):
+                    return stopped("Related source changed during candidate health checks; candidate discarded.")
             original_codes = [(function, function.__code__) for function, _ in updates]
             self._emit("activation_started", "Final verification, snapshot and source replacement.",
                        proposal_id=proposal_id, on_event=on_event)
@@ -634,10 +646,12 @@ class SelfHealRuntime:
                 # confirm orchestrates health/retry; each user callback guards
                 # itself. Never trace a thread while it waits for the app loop.
                 value = confirm()
-                if any(getattr(module, name, None) is not function for name, function in original_bindings.items()):
+                if any(not binding.current() for binding in original_bindings):
                     raise RuntimeError("An editable function was rebound during activation checks")
                 if target.read_bytes() != replacement.encode("utf-8"):
                     raise RuntimeError("Source changed during activation or health checks")
+                if not context_unchanged(self.project_root, request.related_sources):
+                    raise RuntimeError("Related source changed during activation or health checks")
                 self._check("commit")
                 self.core.commit(receipt.target_file, receipt.proposal_id)
                 budget.committed()
@@ -654,8 +668,8 @@ class SelfHealRuntime:
                     try:
                         for function, code in original_codes:
                             function.__code__ = code
-                        for name, function in original_bindings.items():
-                            setattr(module, name, function)
+                        for binding in original_bindings:
+                            binding.restore()
                     except BaseException:
                         restoration_failed = True
                     if restoration_failed:

@@ -14,6 +14,7 @@ from types import ModuleType
 
 from .models import HealthReport, RepairEvent
 from .runtime import SelfHealRuntime
+from ._symbols import valid_symbol
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,18 +26,22 @@ class LiveTarget:
     instructions: str = ""
     editable_symbols: tuple[str, ...] = ()
     retry_safe: bool = False
+    context_files: tuple[str, ...] = ()
 
     def __post_init__(self):
-        if not self.name or not self.module_name or not self.symbol_name or not callable(self.health_check):
+        if not self.name or not self.module_name or not valid_symbol(self.symbol_name) or not callable(self.health_check):
             raise ValueError("A target needs a name, module, symbol and developer health check")
         if type(self.retry_safe) is not bool:
             raise ValueError("retry_safe must be a boolean")
+        if not isinstance(self.context_files, tuple) or len(self.context_files) > 8 or any(
+                type(path) is not str or not path for path in self.context_files):
+            raise ValueError("context_files must be a tuple of at most 8 relative Python paths")
         if type(self.instructions) is not str or len(self.instructions.encode("utf-8")) > 4000:
             raise ValueError("Target instructions must be a string of at most 4000 bytes")
         if not self.editable_symbols:
             object.__setattr__(self, "editable_symbols", (self.symbol_name,))
         if not isinstance(self.editable_symbols, tuple) or len(set(self.editable_symbols)) != len(self.editable_symbols) or any(
-            type(name) is not str or not name.isidentifier() for name in self.editable_symbols
+            not valid_symbol(name) for name in self.editable_symbols
         ):
             raise ValueError("editable_symbols must contain unique function names")
         if self.symbol_name not in self.editable_symbols:
@@ -176,6 +181,7 @@ class LiveControlServer:
                         operation=operation,
                         instructions=target.instructions + "\n\n" + body["instructions"],
                         editable_symbols=target.editable_symbols,
+                        context_files=target.context_files,
                         apply=not body["preview"], on_event=event_sink,
                     )
                     owner._last = {"status": result.status, "healed": result.healed,

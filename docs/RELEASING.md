@@ -1,5 +1,19 @@
 # Release selfheal-runtime 0.3.0
 
+## Current validation status
+
+The expanded method/property support, property checks, diagnostic context and
+native interface marker are release-candidate source changes. Testing was
+stopped at the maintainer's request, and the final source has not been rebuilt
+or validated as an installed wheel. Do not treat this checkout as release-approved.
+No production PyPI upload has been performed by this preparation work.
+
+An older `_core.cp313-win_amd64.pyd` shadowed the ABI3 `_core.pyd` after an editable
+rebuild. The obsolete local binary was retained under `.selfheal/obsolete-native/`.
+On other editable checkouts, inspect for old interpreter-specific native files
+before rebuilding. `python -m selfheal doctor` reports the loaded extension and
+rejects incompatible interfaces or version mismatches.
+
 This guide is for the maintainer. It does not publish anything automatically.
 Build and installed-wheel validation remain required before uploading. Only the
 Python SDK is shipped. The native core uses CPython's 3.11+ stable ABI; standard
@@ -38,8 +52,9 @@ the editable native extension; Rust tests also compile code:
 
 ```powershell
 python -m pip install -e ".[dev]"
+python -m selfheal doctor
 python -m pytest
-cargo test
+cargo test --locked
 ```
 
 The regression suite uses deterministic or mocked providers and must not require
@@ -48,6 +63,11 @@ using the maintainer's own key and enabled model; see `MANUAL_TESTING.md`.
 The timing interface and worker helpers require a fresh native rebuild and the
 `cloudpickle` dependency. Run the isolated manual timing calculator and validate
 Windows Job cleanup/fail-stop behavior yourself using [TIMING.md](TIMING.md).
+
+The `dev` extra includes Hypothesis for the new exploration regressions. On
+Windows, set `$env:PYO3_PYTHON = (Resolve-Path .\.venv\Scripts\python.exe).Path`
+when running Rust tests from this checkout. Run the complete suite after the
+native rebuild; a previously installed native binary is insufficient.
 
 ## Validate the installed wheel outside this checkout
 

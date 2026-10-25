@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import ast
 from pathlib import Path
 from types import CodeType, FunctionType, ModuleType
+
+from .._symbols import function_nodes, resolve_binding
 
 
 class PythonRuntimeAdapter:
@@ -23,15 +26,39 @@ class PythonRuntimeAdapter:
         module = importlib.import_module(module_name)
         path = self.source_file(module_name)
         compiled = compile(source, str(path), "exec", dont_inherit=True)
-        codes = {code.co_name: code for code in compiled.co_consts if isinstance(code, CodeType)}
+        definitions = function_nodes(ast.parse(source))
+        codes = {}
+
+        def index(code):
+            for value in code.co_consts:
+                if isinstance(value, CodeType):
+                    codes[(value.co_qualname, value.co_firstlineno)] = value
+                    index(value)
+
+        index(compiled)
         updates = []
+        seen = set()
         for name in symbols:
-            function = getattr(module, name, None)
-            code = codes.get(name)
-            if (not isinstance(function, FunctionType) or function.__globals__ is not module.__dict__
-                    or function.__code__.co_name != name or function.__code__.co_freevars
-                    or code is None or code.co_freevars):
-                raise ValueError("Live targets must be module-level Python functions without wrapper closures")
+            binding = resolve_binding(module, name)
+            function = binding.function
+            node = definitions.get(name)
+            if node is None:
+                raise ValueError("Target source definition was not found")
+            line = min([node.lineno] + [item.lineno for item in node.decorator_list])
+            code = codes.get((function.__qualname__, line))
+            if (function.__globals__ is not module.__dict__ or code is None
+                    or function.__code__.co_name != node.name):
+                raise ValueError("Live targets must be local Python definitions without wrapper closures")
+            if id(function) in seen:
+                raise ValueError("Editable symbols must not alias the same function")
+            seen.add(id(function))
+            # zero-argument super() carries the original class cell. Keep it;
+            # arbitrary captured state and decorator wrappers remain unsupported.
+            freevars = function.__code__.co_freevars
+            if freevars != code.co_freevars or (freevars and (
+                    freevars != ("__class__",) or type(binding.owner) is not type
+                    or function.__closure__[0].cell_contents is not binding.owner)):
+                raise ValueError("Only the original __class__ closure of a method can be preserved")
             unsupported = inspect.CO_GENERATOR | inspect.CO_ASYNC_GENERATOR
             if function.__code__.co_flags & unsupported or code.co_flags & unsupported:
                 raise ValueError("Generator and async generator functions are not supported live targets")

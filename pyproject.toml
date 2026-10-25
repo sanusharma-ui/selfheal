@@ -29,13 +29,21 @@ classifiers = [
 ]
 dependencies = ["python-dotenv>=1,<2", "cloudpickle>=3.1,<4"]
 
+[project.urls]
+Homepage = "https://github.com/sanusharma-ui/selfheal"
+Documentation = "https://github.com/sanusharma-ui/selfheal/blob/main/docs/AGENT_INTEGRATION.md"
+Repository = "https://github.com/sanusharma-ui/selfheal"
+Issues = "https://github.com/sanusharma-ui/selfheal/issues"
+
 [project.scripts]
 selfheal = "selfheal.__main__:main"
 
 [project.optional-dependencies]
 verification = ["pytest>=8"]
+exploration = ["hypothesis>=6.100,<7"]
 dev = [
     "pytest>=8",
+    "hypothesis>=6.100,<7",
 ]
 
 [tool.maturin]
@@ -58,6 +66,7 @@ exclude = [
     ".env", ".env.local", ".env.production", ".env.development", ".env.test",
     ".venv/**", ".selfheal/**", "**/.selfheal/**", ".git/**",
     "**/__pycache__/**", "**/*.pyc", "**/.pytest_cache/**",
+    "**/.hypothesis/**",
 ]
 
 [tool.pytest.ini_options]

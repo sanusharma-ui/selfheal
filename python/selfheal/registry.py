@@ -4,6 +4,8 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from ._symbols import resolve_binding
+
 
 @dataclass(frozen=True, slots=True)
 class DynamicFunctionHandle:
@@ -12,7 +14,10 @@ class DynamicFunctionHandle:
 
     def resolve(self) -> Callable[..., Any]:
         module = importlib.import_module(self.module_name)
-        target = getattr(module, self.symbol_name)
+        # Preserve ordinary dynamic module dispatch, including existing callers
+        # using callable objects. Dotted repair targets use explicit descriptors.
+        target = (getattr(module, self.symbol_name) if "." not in self.symbol_name
+                  else resolve_binding(module, self.symbol_name).callable())
 
         if not callable(target):
             raise TypeError(

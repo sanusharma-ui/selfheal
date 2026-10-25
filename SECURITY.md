@@ -51,9 +51,11 @@ SelfHeal Runtime performs source-code verification and controlled source replace
   It preserves developer edits. It cannot undo external writes or memory changes,
   and it is not general forced-kill crash recovery. See `docs/TIMING.md`.
 - Scoped activation preserves module state by updating function code rather than
-  re-running initialization. Synchronous and coroutine module-level functions
-  are supported; wrapper closures, generators (including async generators) and
-  native callables are rejected. Async calls share one owning loop and must use
+  re-running initialization. Synchronous and coroutine module-level functions,
+  directly defined methods and property accessors are supported. Original class
+  cells used by `super()` are preserved. Arbitrary wrapper closures, custom
+  metaclasses, inherited target definitions, generators (including async
+  generators) and native callables are rejected. Async calls share one owning loop and must use
   coordinated dispatch; activation waits for admitted calls to finish.
 - Scheduled activation requires `AgentConfig(auto_apply=True)` and safe-to-repeat
   targets. Explicit `heal`/`improve` commands separately authorize activation.
@@ -66,6 +68,15 @@ SelfHeal Runtime performs source-code verification and controlled source replace
   are not implemented. Graceful shutdown waits for accepted repairs.
 - An AI patch can pass known checks while still containing bugs. Improvements need
   developer-defined contracts; rollback does not undo side effects or memory changes.
+- `PropertyCheck` and `ScenarioCheck` require trusted, synchronous, pure predicates
+  with fresh state for each case. Baseline and activation checks run in the app;
+  never use them to fuzz production payments, databases or network services.
+  Counterexamples stay in memory and candidate snapshots, not a persistent case
+  store. `describe_case` explicitly opts into including case details in reports.
+- `context_files` opts into sending up to eight selected project Python files
+  (16 KB combined) as read-only diagnostic context. This does not authorize edits
+  to those files. Detected secrets are refused; arbitrary personal data still
+  requires an application policy. Changed context invalidates the repair.
 
 ## Reporting issues
 

@@ -31,6 +31,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check-config", help="Validate your local API configuration without making a network request")
+    commands.add_parser("doctor", help="Inspect SDK/native compatibility without contacting an AI provider")
     for name in ("status", "heal", "improve"):
         command = commands.add_parser(name)
         command.add_argument("--session", type=Path, default=Path(".selfheal/live.json"))
@@ -46,6 +47,23 @@ def main(argv=None) -> int:
     agent.add_argument("--session", type=Path, default=Path(".selfheal/live.json"))
     agent.add_argument("--timeout", type=float, default=30)
     args = parser.parse_args(argv)
+    if args.command == "doctor":
+        from importlib import metadata
+        from . import __version__, _core
+        from ._native import check_native_compatibility
+        from .errors import ConfigurationError
+        print(f"Python SDK: {__version__}")
+        print(f"Native extension: {_core.__file__}")
+        try:
+            check_native_compatibility()
+            installed = metadata.version("selfheal-runtime")
+            if installed != __version__ or _core.PACKAGE_VERSION != __version__:
+                raise ConfigurationError("Installed metadata, Python SDK and native package versions differ; rebuild/reinstall")
+        except (ConfigurationError, metadata.PackageNotFoundError) as exc:
+            print(f"Compatibility error: {exc}")
+            return 2
+        print("SDK/native interfaces and installed versions match. No API request or repair was performed.")
+        return 0
     if args.command == "check-config":
         from .errors import ConfigurationError
         from .providers import provider_from_env

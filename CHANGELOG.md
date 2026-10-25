@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Dotted targets for directly defined Python instance/static/class methods and
+  property accessors, with class-cell preservation and descriptor-aware rollback.
+- Developer-owned `HealthSuite`, `ScenarioCheck` and optional Hypothesis-backed
+  `PropertyCheck`, including bounded exploration and retained counterexamples.
+- Explicit, bounded `context_files` for read-only cross-module diagnosis, with
+  secret checks and stale-context rejection before commit.
+- Native interface marker and offline `selfheal doctor` command to identify
+  stale editable extensions before contacting an AI provider.
+- Windows virtualenv workers start the underlying interpreter while retaining
+  their environment, so parent ownership and process cleanup use the real PID.
+- Broader CI matrix and release checks for worker files, required dependencies,
+  matching versions and rebuilding a wheel from the source distribution.
+- Final validation was stopped at the maintainer's request. These source changes
+  require a fresh native build, complete regression runs and installed-wheel
+  validation before publication; they are not a verified production release.
+
 - Module-level async function dispatch and safe retry on the owning asyncio loop,
   with async health/inspection APIs and async agent bindings and lifecycle.
 - Awaited calls participate in activation coordination; pending repairs drain

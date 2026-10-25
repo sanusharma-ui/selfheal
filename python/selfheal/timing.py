@@ -13,6 +13,8 @@ import sys
 from threading import Event, Thread
 import time
 
+from ._process_tree import python_worker_command
+
 _current = ContextVar("selfheal_repair_deadline", default=None)
 # Keep deadlines independent of an application's patched scheduling clock.
 # The watchdog uses the OS clock in a fresh interpreter, so both must agree.
@@ -140,8 +142,9 @@ class RepairDeadline:
         self.token = _current.set(self)
         try:
             if self.config.hard_timeout:
+                command, environment = python_worker_command(str(Path(__file__).with_name("_watchdog.py")))
                 self.watchdog = subprocess.Popen(
-                    [sys.executable, str(Path(__file__).with_name("_watchdog.py"))],
+                    command, env=environment,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                     start_new_session=os.name != "nt",

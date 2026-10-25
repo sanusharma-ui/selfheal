@@ -38,8 +38,10 @@ def main():
     with request.open("rb") as source:
         paths = cloudpickle.load(source)
         sys.path[:0] = paths
-        check, module = cloudpickle.load(source)
+        check, module, updates = cloudpickle.load(source)
     try:
+        for function, code in updates:
+            function.__code__ = code
         report = _health_report(check, module)
         data = {"checks": [{"name": item.name, "ok": item.ok is True, "details": item.details}
                            for item in report.checks]}
