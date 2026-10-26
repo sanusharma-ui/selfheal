@@ -3,7 +3,7 @@ requires = ["maturin>=1.15,<2"]
 build-backend = "maturin"
 
 [project]
-name = "selfheal-runtime"
+name = "pyselfheal-rt"
 version = "0.3.0"
 description = "Embeddable AI healing agent and Rust-backed live repair runtime for Python"
 readme = "README.md"
