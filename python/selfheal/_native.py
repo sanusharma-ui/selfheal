@@ -20,5 +20,5 @@ def check_native_compatibility() -> None:
             "SelfHeal's native extension is stale or incompatible with this Python SDK. "
             "Move obsolete _core*.pyd/_core*.so files out of an editable source directory, "
             "then rebuild with 'python -m pip install -e \".[dev]\"', or reinstall a matching "
-            "selfheal-runtime wheel. Restart the application afterwards. No AI request was made."
+            "pyselfheal-rt wheel. Restart the application afterwards. No AI request was made."
         )

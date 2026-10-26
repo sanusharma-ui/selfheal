@@ -103,7 +103,7 @@ class PropertyCheck:
         try:
             import hypothesis  # noqa: F401
         except ImportError:
-            raise ConfigurationError("PropertyCheck requires 'pip install selfheal-runtime[exploration]'") from None
+            raise ConfigurationError("PropertyCheck requires 'pip install pyselfheal-rt[exploration]'") from None
         self.name, self.cases, self.predicate = name, cases, predicate
         self.max_examples, self.max_evaluations = max_examples, max_evaluations
         self.examples = deepcopy(examples)

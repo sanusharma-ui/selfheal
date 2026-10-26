@@ -36,7 +36,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "SelfHeal native extension is unavailable. Install a wheel for your Python/OS with "
-        "'python -m pip install selfheal-runtime', or build this checkout using the release guide."
+        "'python -m pip install pyselfheal-rt', or build this checkout using the release guide."
     ) from exc
 
 

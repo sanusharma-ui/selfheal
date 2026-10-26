@@ -56,7 +56,7 @@ def main(argv=None) -> int:
         print(f"Native extension: {_core.__file__}")
         try:
             check_native_compatibility()
-            installed = metadata.version("selfheal-runtime")
+            installed = metadata.version("pyselfheal-rt")
             if installed != __version__ or _core.PACKAGE_VERSION != __version__:
                 raise ConfigurationError("Installed metadata, Python SDK and native package versions differ; rebuild/reinstall")
         except (ConfigurationError, metadata.PackageNotFoundError) as exc:
