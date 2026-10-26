@@ -4,9 +4,14 @@
 
 **Python 3.11+** &nbsp;·&nbsp; **Rust core** &nbsp;·&nbsp; **Beta** &nbsp;·&nbsp; **Review by default**
 
-SelfHeal embeds a repair agent in your application. When a registered function
-raises an exception or fails a developer-defined health check, it asks your AI
-provider for a scoped patch, verifies the candidate, and presents it for review.
+SelfHeal is a Python SDK for detecting failures, checking AI-proposed repairs,
+and updating selected functions inside a running application. Its Python agent
+handles health checks, provider requests and live dispatch; its Rust core handles
+workspace verification, source snapshots, patch transactions and audit records.
+
+When a registered function raises an exception or fails a developer-defined
+health check, the agent can ask your AI provider for a scoped patch and produce
+a verified preview. Applying it requires explicit authorization.
 Authorized patches update live function bodies without re-running module
 initialization. If activation fails, SelfHeal attempts to restore the previous
 source and function code.
@@ -39,32 +44,40 @@ This is a **single-process Python SDK**. Integrate it into your app, register
 editable functions, and route participating calls through its dispatch lock.
 It cannot attach to an arbitrary process or prove every AI patch correct.
 Synchronous and `async def` functions, directly defined methods and property
-accessors are supported in the source implementation. Async apps use
+accessors are supported. Async apps use
 `async with agent` and `await agent.bind("target")(...)`; see the
 [async integration guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/ASYNC.md) for loop ownership and cancellation.
 
 ## Install and configure your own API
 
-From a repository checkout, install into your application's Python environment:
+Install into your application's Python environment:
+
+```shell
+python -m pip install "pyselfheal-rt[verification]"
+python -m selfheal doctor
+```
+
+The distribution name is **`pyselfheal-rt`**; Python imports and the CLI use
+**`selfheal`**. Use standard CPython 3.11 or later. Compatible wheels include the
+native extension; building from source requires Rust and platform C/C++ build
+prerequisites.
+
+| Installation | Includes |
+| --- | --- |
+| `pyselfheal-rt` | Python SDK, Rust extension, background agent and CLI. |
+| `pyselfheal-rt[verification]` | Adds pytest for candidate regression checks, enabled by default. |
+| `pyselfheal-rt[verification,exploration]` | Also adds Hypothesis for bounded property checks. |
+
+For development from a repository checkout:
 
 ```shell
 python -m pip install -e ".[dev]"
+python -m selfheal doctor
 ```
 
-Source installations require Rust and platform C/C++ build prerequisites.
-See [Windows setup and manual testing](https://github.com/sanusharma-ui/selfheal/blob/main/MANUAL_TESTING.md) for toolchain guidance.
-
-
-Install from PyPI:
-
-```shell
-python -m pip install "selfheal-runtime[verification]"
-```
-
-The `verification` extra installs pytest for project regression checks. The base
-package is `selfheal-runtime`; the Python import is `selfheal`. Normal CPython
-3.11+ is required. Wheels include the native extension; source installations
-require Rust and the platform C/C++ build prerequisites.
+`doctor` checks the installed distribution, Python SDK and native interface
+without contacting a provider. See [Windows setup](https://github.com/sanusharma-ui/selfheal/blob/main/MANUAL_TESTING.md)
+for source-build prerequisites.
 
 Create `.env` in your app's working directory:
 
@@ -134,6 +147,8 @@ with agent, LiveControlServer(runtime, (target,), agent=agent):
 Start the agent once in the owning app process. The context managers must stay
 alive for the application's lifetime. `quote` resolves the current function on
 each call; failures are preserved for the caller and queue a background inspection.
+The agent does not replay the failed application request. Future calls use a
+successfully committed repair.
 Healthy checks skip AI requests by default. Failing checks catch wrong-result
 bugs even when no exception is raised.
 
@@ -143,6 +158,49 @@ nonempty developer health checks and `retry_safe=True` are required for live
 activation. For production-shaped apps, maintain regression tests as well as
 health checks. `SelfHealConfig(run_tests=False)` is an explicit choice to rely on
 syntax and registered health contracts rather than pytest.
+
+### Choose the integration API
+
+| API | Use it for |
+| --- | --- |
+| `agent.bind(name)` / `agent.call(name, ...)` | Coordinated application calls with background inspection after failures. |
+| `runtime.invoke(...)` / `await runtime.ainvoke(...)` | Coordinated calls without automatic repair. |
+| `runtime.call(...)` / `await runtime.acall(...)` | Exception-triggered repair with at most one authorized, explicitly safe retry. |
+| `runtime.inspect(...)` / `await runtime.ainspect(...)` | Explicit health-based inspection or improvement; `apply=False` previews. |
+| `runtime.check_health(...)` / `await runtime.acheck_health(...)` | Developer health checks without an AI request or source change. |
+
+Direct exception repair uses `SelfHealConfig(auto_apply=...)` or a runtime
+`reviewer` callback; background activation uses `AgentConfig(auto_apply=...)`.
+These are separate controls. Declaring `retry_safe=True` means your application
+can safely repeat the relevant work; it does not make side effects reversible.
+
+### Configure the agent with TOML
+
+Copy [selfheal.example.toml](https://github.com/sanusharma-ui/selfheal/blob/main/selfheal.example.toml)
+to your app as `selfheal.toml`, then replace the target modules and trusted health
+callback references:
+
+```python
+agent = SelfHealAgent.from_config(
+    Path("selfheal.toml"), event_sink=TerminalReporter(),
+)
+quote = agent.bind("pricing")
+with agent, LiveControlServer(
+    agent.runtime, tuple(agent.targets.values()), agent=agent,
+):
+    run_your_application(quote=quote)
+```
+
+The imports and app entry point are the same as in the example above.
+`project_root` resolves relative to the TOML file. Credentials remain in `.env`
+or process environment variables.
+
+By default, the agent checks every 300 seconds, skips AI requests for healthy
+scheduled checks, allows six AI attempts per hour and suspends a target after
+three consecutive failures. Failed attempts use exponential backoff. Explicit
+scans and failure notifications can inspect targets even when known checks pass.
+Use `improvement_instructions` to opt into recurring improvements; define health
+contracts for the behavior you expect.
 
 ## Inspect and patch from the terminal
 
@@ -156,12 +214,21 @@ python -m selfheal improve "Handle invalid discounts clearly" --target pricing
 python -m selfheal agent pause
 python -m selfheal agent resume
 python -m selfheal agent status
+python -m selfheal agent scan --target pricing
+python -m selfheal agent reset --target pricing
 ```
 
 `heal` and `improve` without `--preview` authorize a fresh verified live patch.
 Diffs, verification, health results, snapshots and rollback are visible in the
 app terminal and command client. The local control server is authenticated and
 loopback-only; protect its `.selfheal/live.json` credential.
+
+`agent scan` queues an inspection under the agent's existing activation policy;
+`agent reset` clears suspension and backoff without clearing its hourly budget.
+Explicit `heal` and `improve` operations are outside the background agent's hourly
+budget. A preview performs native syntax/pytest verification; candidate health
+checks run on the activation path. Applying after a preview generates a fresh
+candidate rather than approving a saved preview.
 
 ```text
 registered health failure / exception / developer request
@@ -183,9 +250,24 @@ verification, and wait during final verification and activation.
 
 For generated edge cases, workflow invariants, dotted method targets and optional
 read-only helper context, see [deeper checks and method targets](https://github.com/sanusharma-ui/selfheal/blob/main/docs/DEEP_HEALING.md).
-The optional `selfheal-runtime[exploration]` extra supplies Hypothesis for bounded
-property checks. Expected behavior remains developer-owned; generated tests do
-not establish that every bug has been found.
+The optional `pyselfheal-rt[exploration]` extra supplies Hypothesis for bounded
+property checks:
+
+| Building block | Purpose |
+| --- | --- |
+| `ScenarioCheck` | Run a trusted workflow against fresh disposable state and return a boolean contract result. |
+| `PropertyCheck` | Generate and shrink cases, then retain failing examples in memory for subsequent checks. |
+| `HealthSuite` | Combine synchronous checks into one nonempty health report. |
+| `LiveTarget.context_files` | Supply explicitly selected project Python files as read-only provider context. |
+
+Scenario/property predicates are synchronous; async health callbacks are supported
+separately. Generated tests do not establish that every bug has been found.
+Read-only context is limited to eight files and 16 KB combined, and does not expand
+the editable scope or enable multi-file transactions.
+
+Method targets use dotted names such as `Pricing.quote` or `Pricing.total.fget`.
+For an instance method, pass the instance to the bound callable. Property access
+must also use coordinated dispatch; an ordinary `instance.total` read bypasses it.
 
 Run `python -m selfheal doctor` to inspect SDK/native compatibility without an API
 request. A stale editable native extension is rejected before repair starts.
@@ -278,25 +360,45 @@ timeout. It uses a deterministic offline provider by default, with **no API
 request**. Disposable calculator files stay under ignored `.selfheal/manual-timing/`;
 the SDK never imports the fixture.
 
-Expected final output: `MANUAL CALCULATOR: PASS`. This is a maintainer-run
-validation command; the current timing changes still require runtime and native
-build validation. See [the walkthrough and expected results](https://github.com/sanusharma-ui/selfheal/blob/main/docs/TIMING.md#commands-for-you-to-run).
+Expected final output: `MANUAL CALCULATOR: PASS`. The hard-timeout scenario
+intentionally terminates a child calculator process and checks source recovery.
+See [the walkthrough and expected results](https://github.com/sanusharma-ui/selfheal/blob/main/docs/TIMING.md#commands-for-you-to-run).
 
 ## Development and release
+
+From an installed development checkout:
+
+```shell
+python -m selfheal doctor
+python -m pytest tests
+cargo test --locked
+```
+
+CI is configured to run Python tests, SDK/native compatibility checks and Rust
+tests on Windows and Linux with Python 3.11 through 3.14. The release workflow
+builds wheels for Linux x64, Windows x64, macOS Intel and macOS ARM64, plus a source
+archive. It checks archive contents and metadata and runs regressions against
+installed wheels, including a wheel built from the source archive.
+
+Manual workflow dispatch builds validation artifacts. Pushing a `v*` tag also
+enables the PyPI publishing job after the build jobs succeed and the tag matches
+the package version, using the configured `pypi` environment and trusted
+publishing. Workflow configuration alone does not prove a release has published
+or passed on every platform.
 
 | Resource | Purpose |
 | --- | --- |
 | [Integration guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/AGENT_INTEGRATION.md) | Register targets, define health contracts and embed the background agent. |
 | [Async guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/ASYNC.md) | Coroutine dispatch, live health, cancellation, concurrency and manual regression commands. |
+| [Deep healing guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/DEEP_HEALING.md) | Methods, property accessors, scenarios, generated cases and read-only context. |
 | [TOML template](https://github.com/sanusharma-ui/selfheal/blob/main/selfheal.example.toml) | Configure runtime, scheduling and editable targets. |
 | [Manual testing](https://github.com/sanusharma-ui/selfheal/blob/main/MANUAL_TESTING.md) | Set up Windows tooling and walk through the live calculator. |
 | [Timing guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/TIMING.md) | Configure deadlines and exercise the isolated timeout scenarios. |
 | [Release guide](https://github.com/sanusharma-ui/selfheal/blob/main/docs/RELEASING.md) | Build and validate distribution artifacts before publication. |
 | [Changelog](https://github.com/sanusharma-ui/selfheal/blob/main/CHANGELOG.md) | Review version history. |
 
-`examples/live_calculator.py` is a deliberately broken manual fixture. The release
-workflow is manually started by the maintainer and only produces artifacts.
-No PyPI upload is automatic.
+`examples/live_calculator.py` is a deliberately broken manual fixture. Examples
+and test fixtures are separate from the application's SDK integration.
 
 Original source is [MIT licensed](https://github.com/sanusharma-ui/selfheal/blob/main/LICENSE). Bundled dependency terms and retained
 copyright notices are in [THIRD_PARTY_NOTICES.md](https://github.com/sanusharma-ui/selfheal/blob/main/THIRD_PARTY_NOTICES.md).
