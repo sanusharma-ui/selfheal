@@ -118,6 +118,9 @@ def test_hung_candidate_is_killed_without_source_or_live_state_mutation(sample):
 
 def test_candidate_mutation_cannot_touch_live_cache(sample):
     runtime, module, path, source = sample
+    # This tests isolation and rollback, not startup speed. Windows worker
+    # startup plus two native verification passes can exceed the 4s fixture.
+    runtime.config.repair_timeout_seconds = 30
     runtime.provider.source = source.replace("return 1", "CACHE['candidate'] = 1\n    return 2")
     def check(candidate):
         # Worker sees the mutation in its own copy. Live check intentionally
@@ -127,7 +130,7 @@ def test_candidate_mutation_cannot_touch_live_cache(sample):
         return healthy(candidate)
     result = runtime.inspect(module_name=module.__name__, symbol_name="run", health_check=check,
                              retry_safe=True, apply=True)
-    assert result.status == "rolled_back"
+    assert result.status == "rolled_back", result.message
     assert module.CACHE == {} and path.read_text() == source
 
 
